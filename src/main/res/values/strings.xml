@@ -1,0 +1,32 @@
+<resources>
+    <string name="x11_starting_title" translatable="false">%1$s · …</string>
+    <string name="x11_title">Linux desktop</string>
+    <string name="x11_display_description">Linux desktop. Tap to click, drag to move, hold to right-click, use two fingers to scroll.</string>
+    <string name="x11_back">Back</string>
+    <string name="x11_new">New session</string>
+    <string name="x11_keyboard">Keyboard</string>
+    <string name="x11_log">Session log</string>
+    <string name="x11_help">Setup</string>
+    <string name="x11_stop">Close session</string>
+    <string name="x11_stop_all">Stop all desktops</string>
+    <string name="x11_start">Start</string>
+    <string name="x11_desktop_command">Desktop or window manager command</string>
+    <string name="x11_no_environment">Enable or import a PRoot Linux environment first.</string>
+    <string name="x11_error">Unable to start desktop</string>
+    <string name="x11_starting">Starting</string>
+    <string name="x11_connected">Connected</string>
+    <string name="x11_failed">Failed · see session log</string>
+    <string name="x11_stopped">Stopped</string>
+    <string name="x11_notification">Local Linux desktops are running. Tap to return.</string>
+    <string name="x11_intro">Choose a desktop preset or enter a command. For first-time setup, ask the AI to follow the Linux GUI tool guide and install the required packages.</string>
+    <string name="x11_hide_controls">Hide controls</string>
+    <string name="x11_show_controls">Show desktop controls</string>
+    <string name="x11_presets">Presets / recent</string>
+    <string name="x11_overlay">Float window</string>
+    <string name="x11_screenshot">Screenshot</string>
+    <string name="x11_screenshot_saved">Linux screenshot saved</string>
+    <string name="x11_minimize">Minimize or restore</string>
+    <string name="x11_fullscreen">Open full screen</string>
+    <string name="x11_resize">Drag to resize preview</string>
+    <string name="x11_tool_description">Install guidance, desktop sessions, floating GUI app previews and live Linux screenshots.</string>
+</resources>

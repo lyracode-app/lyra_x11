@@ -1,0 +1,32 @@
+{
+  "termux_x11": "f1d9834236341a5b3723cd7e4fe65601673a2d5a",
+  "gitlinks": " 6a8690fc8d26c815e798c588f796eabe9d684cf0 lorie/src/main/cpp/bzip2 (6a8690f)\n c84bc9459357a40e46e2fec0408d04fbdde2c973 lorie/src/main/cpp/libepoxy (c84bc94)\n 780d1f6f192a331de7b298a96e23ebc44d2a884b lorie/src/main/cpp/libfontenc (780d1f6)\n 5ca4ca92f629d9d83e83544b9239abaaacf0a527 lorie/src/main/cpp/libtirpc (libtirpc-1-2-7-rc4)\n 6c75545a1deb51f5903992c52af6bc35cc9bc103 lorie/src/main/cpp/libx11 (6c75545)\n a9c65683e68b3a4349afee5d7673b393fb924d2e lorie/src/main/cpp/libxau (a9c6568)\n dd8631c61465cc0de5e476c7a98e56528d62b163 lorie/src/main/cpp/libxcvt (dd8631c)\n 1192d3bc407348ff316bd3bffc791b3ac73f591b lorie/src/main/cpp/libxdmcp (1192d3b)\n 975cc6526e892c6fad8fa49d0fef58565fbaa003 lorie/src/main/cpp/libxfont (975cc65)\n 42e5dedd7fd3c7c73f3870a8751893c03c1afc69 lorie/src/main/cpp/libxkbfile (42e5ded)\n 89f064748554e11832a3ec783945e1f4c7fe846e lorie/src/main/cpp/libxshmfence (89f0647)\n cf05ba4a10c90da2c63805a5375e983b174e28b0 lorie/src/main/cpp/libxtrans (cf05ba4)\n 9cc163c9da0fb4da430641715313d95a6ec466d9 lorie/src/main/cpp/pixman (9cc163c)\n 2c7789785981ad1fce3858c726615b49293f7de0 lorie/src/main/cpp/xkbcomp (2c77897)\n 6d3907b6d5dc4aa7d7ee6ee5d7d8714e7466630b lorie/src/main/cpp/xorgproto (xorgproto-2026.1)\n 65d790bd208ec380b196eb98f144abb0b32e334d lorie/src/main/cpp/xserver (65d790b)\n",
+  "archives": {
+    "bzip2.tar.gz": "df0f9fef7826bd797848f178bdae76e5e8a7618c78a7f538790647fb8370a564",
+    "libepoxy.tar.gz": "0b3ea04f9f64886cedcffca0f06e3cff2b2852f56972a16488b36dcb69856b56",
+    "libfontenc.tar.gz": "3f2cf99c79ceef7932c238af142d6e8bcd7a400912306c5d2ebaad6b128318aa",
+    "libtirpc.tar.gz": "8e3012955c4a18bb01ea5aa6852308d02365d9b5781e87af8593507f64cc8fd7",
+    "libx11.tar.gz": "7eb988d071d7bdadde3d95e6254d6237d4cc9f79e09025aeae9209929dc8c4ed",
+    "libxau.tar.gz": "74ba3a0f97b3c9d185586bcccfeee956de9030cfe9e1ce5c46e6bbee40239a20",
+    "libxcvt.tar.gz": "9402d0970161fa41dda566cd3d7a048b5b8550ef9a0a96ae02b1d4d403bded84",
+    "libxdmcp.tar.gz": "9a80595d7fc4aaccc4fa1bebd69a7b668275ff65ab06bb360f2d20c7ed80d0e2",
+    "libxfont.tar.gz": "06dc3be4eae1b170c316fbadf0bc47a03dcef04dacf6121b2bd5ed4a2130f8e8",
+    "libxkbfile.tar.gz": "4382fa401e4278a737ece19ad63f8f6eb3b27435f5c86cc2051bc4c3645b31d2",
+    "libxshmfence.tar.gz": "e155a95ba3393769dff4d1b90fc8a71c0d440a2c99a19a65d3acec4242acebfe",
+    "libxtrans.tar.gz": "c9894d768a50dd5fc7a415d6f9c40791e4749d8478ce7f8dbb82aae08fb91623",
+    "pixman.tar.gz": "a0b3406d371bc7f0f9448dcc195ba24e39fbf6a733f2872d0f3f3c77b60121c2",
+    "termux-x11.tar.gz": "51880892cba897757a34d476b6ba9178594c9803644d575526e716d0acf4fa9a",
+    "xkbcomp.tar.gz": "aba7f490b2d4e30c301b1a1d990ab9de863a3e6be5f95601b69c3da63f4dc5c3",
+    "xorgproto.tar.gz": "e2fd521cf38bca490194285a8d93d8dbb0aa9bd15a4918e0e0a44e4603df2d64",
+    "xserver.tar.gz": "678d749c0b701a2ef750b021582c869193d0e101fd5fb6704ca3de95463d6abe"
+  },
+  "generated": {
+    "ks_tables.h": "40049c0a4a7963973381abc25c79dd4d3b88a6966a35fe6d277da838fbc5484e",
+    "xkbparse.c": "5d5edc2a9072ffe0a9af151ca922f4ba471c945e30d7946aa42149abdc793c81"
+  },
+  "xkb_data": {
+    "package": "xkb-data_2.42-1ubuntu1_all.deb",
+    "project": "xkeyboard-config 2.42",
+    "zip_sha256": "ae542de741806defa369871fd97dd49054c80f16c224bfbf5fb557de78b39611"
+  }
+}

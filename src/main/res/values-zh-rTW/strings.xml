@@ -1,0 +1,31 @@
+<resources>
+    <string name="x11_title">Linux 圖形桌面</string>
+    <string name="x11_display_description">Linux 桌面。輕點單擊，拖曳模擬左鍵拖曳，長按右鍵，雙指捲動。</string>
+    <string name="x11_back">返回</string>
+    <string name="x11_new">新增工作階段</string>
+    <string name="x11_keyboard">鍵盤</string>
+    <string name="x11_log">工作階段記錄</string>
+    <string name="x11_help">設定說明</string>
+    <string name="x11_stop">關閉工作階段</string>
+    <string name="x11_stop_all">停止全部桌面</string>
+    <string name="x11_start">啟動</string>
+    <string name="x11_desktop_command">桌面或視窗管理器啟動指令</string>
+    <string name="x11_no_environment">請先啟用或匯入一個 PRoot Linux 環境。</string>
+    <string name="x11_error">無法啟動桌面</string>
+    <string name="x11_starting">正在啟動</string>
+    <string name="x11_connected">已連線</string>
+    <string name="x11_failed">失敗 · 請查看工作階段記錄</string>
+    <string name="x11_stopped">已停止</string>
+    <string name="x11_notification">本機 Linux 桌面正在執行，點按返回。</string>
+    <string name="x11_intro">選擇桌面預設或輸入啟動指令。首次使用可讓 AI 按 Linux GUI 工具規範安裝所需套件。</string>
+    <string name="x11_hide_controls">收起工具列</string>
+    <string name="x11_show_controls">展開桌面控制</string>
+    <string name="x11_presets">預設 / 最近使用</string>
+    <string name="x11_overlay">浮動顯示</string>
+    <string name="x11_screenshot">截圖</string>
+    <string name="x11_screenshot_saved">Linux 畫面已儲存</string>
+    <string name="x11_minimize">最小化或還原</string>
+    <string name="x11_fullscreen">全螢幕開啟</string>
+    <string name="x11_resize">拖曳調整預覽大小</string>
+    <string name="x11_tool_description">Linux 圖形安裝規範、桌面工作階段、應用程式浮動預覽與即時畫面截圖。</string>
+</resources>

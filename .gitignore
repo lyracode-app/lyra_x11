@@ -1,0 +1,87 @@
+# Gradle / Android build output
+.gradle/
+.kotlin/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+.vs
+.vs.*
+
+# Local SDK and machine-specific files
+local.properties
+*.iml
+.idea/
+!.idea/codeStyles/
+!.idea/codeStyles/**
+
+# Native / Meson / CMake / Python build artifacts
+# Shipped binaries under src/main/jniLibs/ live in the repository on purpose.
+native/build/
+native/build-verified/
+native/xserver/build/
+__pycache__/
+*.py[cod]
+*.o
+*.obj
+*.a
+*.ninja_deps
+*.ninja_log
+compile_commands.json
+meson-logs/
+meson-private/
+
+# Signing keys and release credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+keystore.properties
+signing.properties
+release.properties
+play-account.json
+service-account.json
+
+# Secrets and local environment
+.env
+.env.*
+*.env
+secrets.properties
+apikeys.properties
+credentials.json
+google-services.json
+
+# Logs, crash dumps, profiler traces, test device output
+*.log
+hs_err_pid*
+replay_pid*
+*.hprof
+*.trace
+*.stacktrace
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.tmp
+*.temp
+
+# Local generated caches / downloaded runtime data
+/.cache/
+/cache/
+/caches/
+/logs/
+/tmp/
+/temp/

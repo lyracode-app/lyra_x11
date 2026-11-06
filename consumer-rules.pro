@@ -1,0 +1,1 @@
+-keep class com.yukisoffd.lyra.x11.nativebackend.NativeDisplay { *; }

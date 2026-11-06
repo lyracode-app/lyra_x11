@@ -1,0 +1,16 @@
+{
+  "build_renderer.py": "46116e5053a9b784056276b6479c8f8a44c7061de114b6fca609fbd130520b7c",
+  "egl_probe.c": "c15fbe39d123fe84a3a18dc3713acd6ea866418f831bde523d754b06114e984f",
+  "upstream/libepoxy-1.5.10.tar.gz": "a7ced37f4102b745ac86d6a70a9da399cc139ff168ba6b8002b4d8d43c900c15",
+  "upstream/virglrenderer-1.3.0.tar.gz": "c0e7240311896b12025c17497750f72f4a38cdd59b8d7d7f514290855bcffbc5",
+  "patches/0001-do-not-use-gbm.patch.beforehostbuild": "3c6c26054a8c575e7b19bc374bc0b5976506df10bed38dde46259e0252c87270",
+  "patches/0002-avoid-gnu-offsetof-extensions-error.patch.beforehostbuild": "886b58f56917b29b3dc47e2dc7b277a1510209702190133d58ff0f5aab61affb",
+  "patches/0004-Fallback-to-ashmem.patch.beforehostbuild": "3848656628611e71bfab705d23146390e7778132ccb327a9368d71dc81ef1f17",
+  "patches/0005-Enable-debug-for-EGL.patch.beforehostbuild": "7c40e61af71b53e2067254727fd7126ca05a97139b35e62f1b065222c2584828",
+  "patches/0006-Disable-feature-feat_dual_src_blend.patch.beforehostbuild": "eeaa564b1f0317e6285d74414cbf58dbe9f083e30c3cad034ff800d3d2b6518e",
+  "patches/0008-Impl-DXTn-S3TC-texture-decompression-in-virglrenderer.patch.beforehostbuild": "40e8f14aa6b9f95795d64bbd55346e7ba1401f7b3e8f06bdade311bfa27e66f5",
+  "patches/0009-disable-termux-detection.patch.beforehostbuild": "5e466a64a3d375fa23dffd1bde72ddc51f6adce328e57df6c214b29bdd7ca337",
+  "patches/0010-disable-memfd_create-timespec_get.patch.beforehostbuild": "3fc7b763aa16addbcbd81145b1d9cde1227bef60961feafed51594440a0ab65c",
+  "patches/build.sh": "2ae3477b676fd920b49d765d88dc98e9f0e976e9493edbdee48bf416535687e4",
+  "patches/COPYING-gl4es": "69a3049c77abd88658f6ad7cf6a5b6ceb5cf03b80e60f7c4657d90322cfab7bd"
+}

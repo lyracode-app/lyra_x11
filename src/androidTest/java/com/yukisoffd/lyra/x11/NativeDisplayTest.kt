@@ -1,0 +1,199 @@
+package com.yukisoffd.lyra.x11
+
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
+import android.view.SurfaceView
+import android.widget.LinearLayout
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.yukisoffd.lyra.x11.media.MediaTestActivity
+import com.yukisoffd.lyra.x11.nativebackend.NativeDisplay
+import java.io.DataInputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** A real standard X11 client exercises the embedded server, not a synthetic framebuffer. */
+@RunWith(AndroidJUnit4::class)
+class NativeDisplayTest {
+    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    private val context get() = instrumentation.targetContext
+    private fun until(message: String, check: () -> Boolean) {
+        val deadline=System.nanoTime()+8_000_000_000L
+        while(!check() && System.nanoTime()<deadline) Thread.sleep(25)
+        assertTrue(message,check())
+    }
+    @Test fun nativeX11AuthenticatesAndPresentsSharedBuffersToMultipleSurfaces() {
+        val bridge=File(context.cacheDir,"xt-${System.nanoTime().toString(16)}").apply { mkdir() }
+        val id=UUID.randomUUID().toString();val key=id.replace("-", "").take(16)
+        val media=File(bridge,key).apply { mkdir() }
+        val logs=StringBuffer()
+        val options=GuiOptions(width=800,height=600,framesPerSecond=60,audio=AudioBackend.OFF,graphics=GraphicsBackend.SOFTWARE,displayBackend=DisplayBackend.NATIVE)
+        val display=try { NativeDisplay.create(context,bridge,id,101,options) { logs.append(it).append('\n') } }
+            catch(error: Throwable) { throw AssertionError(logs.toString(),error) }
+        val activity=instrumentation.startActivitySync(Intent(context,MediaTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val views=ArrayList<SurfaceView>()
+        lateinit var guiView: X11DisplayView
+        val session=GuiSession(id,GuiEnvironment("test","Test Linux"),101,options)
+        try {
+            assertThrows(IllegalStateException::class.java) { NativeDisplay.create(context,bridge,id,101,options) {} }
+            assertTrue("Duplicate preparation must preserve the live server",display.isAlive)
+            assertTrue(File(media,"xs/auth").exists())
+            instrumentation.runOnMainSync {
+                activity.setContentView(LinearLayout(activity).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                    guiView=X11DisplayView(activity).apply { this.session=session }
+                    views+=guiView.getChildAt(0) as SurfaceView
+                    addView(guiView,LinearLayout.LayoutParams(0,-1,1f))
+                    addView(SurfaceView(activity).also { views+=it },LinearLayout.LayoutParams(0,-1,1f))
+                })
+                // The view is created while preparation is still pending, as in the real UI.
+                session.nativeDisplay=display;guiView.invalidate()
+            }
+            until("Android surfaces not ready") { views.all { it.holder.surface.isValid } }
+            instrumentation.runOnMainSync { display.surface(100_000,views[1].holder.surface) }
+            val auth=File(media,"xs/auth").readBytes().takeLast(16).toByteArray()
+            // Missing/wrong cookies must fail; local use never disables X11 authorization.
+            XClient(File(bridge,".X11-unix/X101"),ByteArray(16)).use { assertFalse(it.accepted) }
+            XClient(File(bridge,".X11-unix/X101"),auth).use { client ->
+                assertTrue(logs.toString()+client.reason,client.accepted)
+                assertEquals(800,client.width); assertEquals(600,client.height)
+                client.paint(0x00dc2828)
+                assertEquals("X11 root pixel",0x00dc2828,client.pixel())
+                until(logs.toString()) { display.hasFrame && (display.diagnostics()["gpu_mirrors"] as Long)>0 }
+                until("First native frame must be red") {
+                    display.capture().let { image -> assertEquals(800,image.width);assertEquals(600,image.height);val c=image.getPixel(image.width/3,image.height/3)
+                        image.recycle();Color.red(c)>180&&Color.green(c)<90 }
+                }
+                views.forEachIndexed { index,view -> until("Android surface $index must show X11 pixels") { Color.red(surfacePixel(view))>180 } }
+                val readbacks=display.diagnostics()["screenshot_readbacks"]
+                val beforeFrames=display.diagnostics()["presented_frames"] as Long
+                client.paint(0x0028dc28)
+                until("X11 damage must present without a screenshot request") { (display.diagnostics()["presented_frames"] as Long)>beforeFrames }
+                assertEquals("Normal presentation must never read pixels on CPU",readbacks,display.diagnostics()["screenshot_readbacks"])
+                views.forEachIndexed { index,view -> until("Android surface $index must update to green") { Color.green(surfacePixel(view))>180 } }
+                display.capture().let { image -> assertTrue(Color.green(image.getPixel(image.width/3,image.height/3))>180); image.recycle() }
+                display.pointer(200,150,0)
+                Thread.sleep(100)
+                val point=client.queryPointer()
+                assertEquals(200,point.first); assertEquals(150,point.second)
+                client.selectKeyboard()
+                instrumentation.runOnMainSync { guiView.sendSpecial('a'.code) }
+                assertEquals(listOf(2,3),client.keyEvents())
+                instrumentation.runOnMainSync { guiView.session=null }
+                client.paint(0x002828dc)
+                until("Remaining surface must continue presenting") { (display.diagnostics()["surfaces"] as Long)==1L }
+                Thread.sleep(100)
+                display.capture().let { image -> assertTrue(Color.blue(image.getPixel(image.width/3,image.height/3))>180); image.recycle() }
+                until("The remaining Android surface must show blue") { Color.blue(surfacePixel(views[1]))>180 }
+                val stats=display.diagnostics()
+                assertEquals(stats["presented_frames"],(stats["ahb_frames"] as Long)+(stats["uploaded_frames"] as Long))
+                assertTrue(stats["transport"] in listOf("ahardwarebuffer_eglimage","shared_memory_texture_upload"))
+                assertEquals(false,stats["vnc_encoding"])
+                android.util.Log.i("LyraNativeX11Test","NATIVE_X11_OK $stats")
+            }
+        } catch(error: Throwable) { throw AssertionError(logs.toString()+"\n"+display.diagnostics(),error) }
+        finally {
+            instrumentation.runOnMainSync { if(views.isNotEmpty())guiView.session=null;display.surface(100_000,null);activity.finish() }
+            display.close();media.delete();File(bridge,".X11-unix").delete();bridge.delete()
+        }
+        assertFalse(display.isAlive)
+    }
+
+    private fun surfacePixel(view: SurfaceView): Int {
+        val scale=minOf(view.width/640f,view.height/480f)
+        val w=(640*scale).toInt();val h=(480*scale).toInt()
+        val left=(view.width-w)/2;val top=(view.height-h)/2
+        val image=Bitmap.createBitmap(64,64,Bitmap.Config.ARGB_8888)
+        val done=CountDownLatch(1);var result=-1
+        try {
+            PixelCopy.request(view.holder.surface,Rect(left,top,left+w,top+h),image,{ result=it;done.countDown() },Handler(Looper.getMainLooper()))
+            assertTrue(done.await(3,TimeUnit.SECONDS));assertEquals(PixelCopy.SUCCESS,result)
+            val pixel=image.getPixel(16,16)
+            return pixel
+        } finally { image.recycle() }
+    }
+
+    private class XClient(socket: File,cookie: ByteArray) : AutoCloseable {
+        private val connection=LocalSocket().apply { connect(LocalSocketAddress(socket.path,LocalSocketAddress.Namespace.FILESYSTEM));soTimeout=4000 }
+        private val input=DataInputStream(connection.inputStream)
+        private val output=connection.outputStream
+        var accepted=false; private set
+        var reason=""; private set
+        var width=0;private set
+        var height=0;private set
+        private var root=0;private var base=0;private var gc=0
+        private fun bytes(size: Int,block: ByteBuffer.()->Unit)=ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN).apply(block).array()
+        private fun pad(n: Int)=(n+3)and -4
+        init {
+            val name="MIT-MAGIC-COOKIE-1".toByteArray()
+            output.write(bytes(12+pad(name.size)+pad(cookie.size)) {
+                put('l'.code.toByte());put(0);putShort(11);putShort(0);putShort(name.size.toShort());putShort(cookie.size.toShort());putShort(0)
+                put(name);position(12+pad(name.size));put(cookie)
+            });output.flush()
+            val header=ByteArray(8);input.readFully(header)
+            val length=((header[6].toInt()and 255)or((header[7].toInt()and 255)shl 8))*4
+            val body=ByteArray(length);input.readFully(body)
+            accepted=header[0].toInt()==1
+            if(!accepted) reason=String(body.take(header[1].toInt()and 255).toByteArray())
+            else {
+                val setup=ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN)
+                base=setup.getInt(4)
+                val offset=32+pad(setup.getShort(16).toInt()and 65535)+(body[21].toInt()and 255)*8
+                root=setup.getInt(offset);width=setup.getShort(offset+20).toInt()and 65535;height=setup.getShort(offset+22).toInt()and 65535
+                gc=base or 1
+                output.write(bytes(16) { put(55);put(0);putShort(4);putInt(gc);putInt(root);putInt(0) })
+            }
+        }
+        fun paint(color: Int) {
+            output.write(bytes(16) { put(56);put(0);putShort(4);putInt(gc);putInt(4);putInt(color) })
+            output.write(bytes(20) { put(70);put(0);putShort(5);putInt(root);putInt(gc);putShort(0);putShort(0);putShort(width.toShort());putShort(height.toShort()) })
+            output.flush()
+        }
+        fun queryPointer(): Pair<Int,Int> {
+            output.write(bytes(8) { put(38);put(0);putShort(2);putInt(root) });output.flush()
+            val reply=ByteArray(32); input.readFully(reply)
+            check(reply[0].toInt()==1) { "X11 error: ${reply.joinToString()}" }
+            val data=ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+            return data.getShort(16).toInt() to data.getShort(18).toInt()
+        }
+        fun pixel(): Int {
+            output.write(bytes(20) { put(73);put(2);putShort(5);putInt(root);putShort((width/2).toShort());putShort((height/2).toShort());putShort(1);putShort(1);putInt(-1) });output.flush()
+            val reply=ByteArray(32);input.readFully(reply)
+            check(reply[0].toInt()==1) { "X11 error: ${reply.joinToString()}" }
+            val data=ByteArray(4);input.readFully(data)
+            return ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).int and 0x00ffffff
+        }
+        fun selectKeyboard() {
+            output.write(bytes(16) { put(2);put(0);putShort(4);putInt(root);putInt(1 shl 11);putInt(3) })
+            output.write(bytes(12) { put(42);put(1);putShort(3);putInt(root);putInt(0) })
+            output.write(bytes(4) { put(43);put(0);putShort(1) });output.flush()
+            val reply=ByteArray(32);input.readFully(reply);check(reply[0].toInt()==1)
+        }
+        fun keyEvents(): List<Int> {
+            val events=ArrayList<Int>()
+            repeat(8) {
+                val reply=ByteArray(32);input.readFully(reply)
+                val type=reply[0].toInt()and 127
+                check(type!=0) { "X11 input error: ${reply.joinToString()}" }
+                if(type==2||type==3)events+=type
+                if(events.size==2)return events
+            }
+            error("Key events missing")
+        }
+        override fun close()=connection.close()
+    }
+}

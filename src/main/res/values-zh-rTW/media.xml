@@ -1,0 +1,22 @@
+<resources>
+    <string name="x11_audio_mute">靜音</string>
+    <string name="x11_audio_resume">恢復聲音</string>
+    <string name="x11_media_status">音訊 / GPU 狀態</string>
+    <string name="x11_audio_toggle">靜音或恢復聲音</string>
+    <string-array name="x11_audio_modes">
+        <item>音訊：自動</item>
+        <item>音訊：PulseAudio</item>
+        <item>音訊：PipeWire</item>
+        <item>音訊：關閉</item>
+    </string-array>
+    <string-array name="x11_graphics_modes">
+        <item>GPU：自動</item>
+        <item>GPU：強制 VirGL</item>
+        <item>GPU：軟體渲染</item>
+    </string-array>
+    <string-array name="x11_display_modes">
+        <item>顯示：自動（優先原生 X11）</item>
+        <item>顯示：原生 X11 / AHardwareBuffer</item>
+        <item>顯示：VNC 備用</item>
+    </string-array>
+</resources>

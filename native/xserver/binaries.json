@@ -1,0 +1,6 @@
+{
+  "arm64-v8a/liblyra_xserver.so": "78454828def42ebda65560333ad18b5e35a2c00058ca0094274feaa670a78acc",
+  "arm64-v8a/liblyra_xserver_exec.so": "1df27e39cb53d326467afd89166c8e14b02b085256c62c0bdd595fdc0d68e383",
+  "x86_64/liblyra_xserver.so": "3cdc3298bbaf4b3b9a1791a044ee70f12dfccc031a47ee17650472cc91764512",
+  "x86_64/liblyra_xserver_exec.so": "dbab2db8188c6ba22510493e95de177ce8477f2ee3a163af57716421a2d32374"
+}
