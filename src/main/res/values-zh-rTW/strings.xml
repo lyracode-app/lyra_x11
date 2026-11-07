@@ -9,12 +9,17 @@
     <string name="x11_stop">關閉工作階段</string>
     <string name="x11_stop_all">停止全部桌面</string>
     <string name="x11_start">啟動</string>
+    <string name="x11_environment">Linux 環境</string>
+    <string name="x11_resolution">解析度</string>
+    <string name="x11_frame_rate">畫面更新率</string>
+    <string name="x11_fps_value">%1$d 幀/秒</string>
     <string name="x11_desktop_command">桌面或視窗管理器啟動指令</string>
     <string name="x11_no_environment">請先啟用或匯入一個 PRoot Linux 環境。</string>
     <string name="x11_error">無法啟動桌面</string>
     <string name="x11_starting">正在啟動</string>
     <string name="x11_connected">已連線</string>
     <string name="x11_failed">失敗 · 請查看工作階段記錄</string>
+    <string name="x11_virgl_retry">VirGL 驗證失敗。請查看工作階段記錄，可重試或選擇軟體繪圖。</string>
     <string name="x11_stopped">已停止</string>
     <string name="x11_notification">本機 Linux 桌面正在執行，點按返回。</string>
     <string name="x11_intro">選擇桌面預設或輸入啟動指令。首次使用可讓 AI 按 Linux GUI 工具規範安裝所需套件。</string>

@@ -1,0 +1,155 @@
+--- a/vtest/vtest_server.c
++++ b/vtest/vtest_server.c
+@@ -38,6 +38,9 @@
+ #include <fcntl.h>
+ #include <getopt.h>
+ #include <string.h>
++#include <sys/prctl.h>
++#include <sys/signalfd.h>
++#include <sys/wait.h>
+ 
+ #include "util.h"
+ #include "util/list.h"
+@@ -120,6 +123,9 @@
+ 
+    .ctx_flags = 0,
+ };
++
++static int child_signal_fd = -1;
++static sigset_t worker_signal_mask;
+ 
+ static void vtest_server_getenv(void);
+ static void vtest_server_parse_args(int argc, char **argv);
+@@ -326,18 +332,28 @@
+ 
+ static void vtest_server_set_signal_child(void)
+ {
+-   struct sigaction sa;
+-   int ret;
+-
+-   memset(&sa, 0, sizeof(sa));
+-   sigemptyset(&sa.sa_mask);
+-   sa.sa_handler = SIG_IGN;
+-   sa.sa_flags = 0;
+-
+-   ret = sigaction(SIGCHLD, &sa, NULL);
+-   if (ret == -1) {
+-      perror("Failed to set SIGCHLD");
++   sigset_t mask;
++   sigemptyset(&mask);
++   sigaddset(&mask, SIGCHLD);
++   if (sigprocmask(SIG_BLOCK, &mask, &worker_signal_mask) == -1 ||
++       (child_signal_fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK)) == -1) {
++      perror("Failed to watch vtest workers");
+       exit(1);
++   }
++}
++
++static void vtest_server_reap_workers(void)
++{
++   struct signalfd_siginfo signal_info;
++   while (read(child_signal_fd, &signal_info, sizeof(signal_info)) == sizeof(signal_info)) {
++      int status;
++      pid_t pid;
++      while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
++         if (WIFSIGNALED(status))
++            fprintf(stderr, "LYRA_VTEST_WORKER_EXIT pid=%d signal=%d\n", pid, WTERMSIG(status));
++         else if (WIFEXITED(status) && WEXITSTATUS(status))
++            fprintf(stderr, "LYRA_VTEST_WORKER_EXIT pid=%d status=%d\n", pid, WEXITSTATUS(status));
++      }
+    }
+ }
+ 
+@@ -441,6 +457,10 @@
+    int ret;
+ 
+    FD_ZERO(&read_fds);
++   if (child_signal_fd >= 0) {
++      FD_SET(child_signal_fd, &read_fds);
++      max_fd = child_signal_fd;
++   }
+ 
+    LIST_FOR_EACH_ENTRY(client, &server.active_clients, head) {
+       FD_SET(client->in_fd, &read_fds);
+@@ -453,7 +473,7 @@
+    }
+ 
+    /* accept new clients when there is none or when multi_clients is set */
+-   if (server.socket >= 0 && (max_fd < 0 || server.multi_clients)) {
++   if (server.socket >= 0 && (server.do_fork || max_fd < 0 || server.multi_clients)) {
+       FD_SET(server.socket, &read_fds);
+       max_fd = MAX2(server.socket, max_fd);
+    }
+@@ -472,6 +492,8 @@
+       perror("Failed to select on socket!");
+       exit(1);
+    }
++   if (child_signal_fd >= 0 && FD_ISSET(child_signal_fd, &read_fds))
++      vtest_server_reap_workers();
+ 
+    LIST_FOR_EACH_ENTRY(client, &server.active_clients, head) {
+       if (FD_ISSET(client->in_fd, &read_fds)) {
+@@ -545,11 +567,26 @@
+ 
+ static pid_t vtest_server_fork(void)
+ {
++   pid_t parent = getpid();
+    pid_t pid = fork();
+ 
+-   if (pid == 0) {
+-      /* child */
+-      vtest_server_set_signal_segv();
++   if (pid < 0) {
++      perror("Failed to start vtest worker");
++   } else if (pid > 0) {
++      fprintf(stdout, "LYRA_VTEST_WORKER_START pid=%d\n", pid);
++   } else {
++      /* The parent only listens and has never initialized EGL. A worker must
++       * exit with its session even when a guest has kept its connection open. */
++      if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0L, 0L, 0L) == -1) {
++         perror("Failed to bind vtest worker lifetime to its parent");
++         _exit(EXIT_FAILURE);
++      }
++      if (getppid() != parent)
++         _exit(EXIT_FAILURE);
++      close(child_signal_fd);
++      child_signal_fd = -1;
++      if (sigprocmask(SIG_SETMASK, &worker_signal_mask, NULL) == -1)
++         _exit(EXIT_FAILURE);
+       vtest_server_close_socket();
+       server.main_server = false;
+       server.do_fork = false;
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -7523,6 +7523,12 @@
+       return true;
+ 
+    while (err != GL_NO_ERROR) {
++      if (err == GL_INVALID_FRAMEBUFFER_OPERATION) {
++         GLint draw_fbo = 0;
++         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
++         virgl_error("LYRA_VREND_FRAMEBUFFER ctx=%u draw_fbo=%d status=0x%x\n",
++                     ctx->ctx_id, draw_fbo, glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER));
++      }
+ #ifdef CHECK_GL_ERRORS
+       vrend_report_context_error(ctx, VIRGL_ERROR_CTX_UNKNOWN, err);
+ #else
+@@ -11370,7 +11376,8 @@
+ 
+ #ifdef HAVE_EPOXY_EGL_H
+    int fence_fd = -1;
+-   if (vrend_renderer_export_ctx0_fence(fence_id, &fence_fd) == 0 &&
++   /* Only legacy ctx0 fence IDs belong to the export table. */
++   if (!ctx->ctx_id && vrend_renderer_export_ctx0_fence(fence_id, &fence_fd) == 0 &&
+        virgl_fence_set_fd(fence_id, fence_fd))
+       virgl_error("failed to export fence sync object\n");
+    if (fence_fd != -1)
+@@ -13566,7 +13573,7 @@
+ 
+ int vrend_renderer_export_ctx0_fence(uint32_t fence_id, int* out_fd) {
+ #ifdef HAVE_EPOXY_EGL_H
+-   int ret = 0;
++   int ret = -EINVAL;
+ 
+    if (!vrend_state.use_egl_fence) {
+       return -EINVAL;

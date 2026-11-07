@@ -17,4 +17,14 @@ class FramePacerTest {
         assertFalse(pacer.frame(1_000_000_001))
         pacer.reset();assertTrue(pacer.frame(1_000_000_002))
     }
+
+    @Test fun highFrameRatesFollowTheRequestedCapAndDisplayRefresh() {
+        for (rate in listOf(90, 120)) {
+            for (refresh in listOf(60, 90, 120, 144)) {
+                val pacer = FramePacer(rate)
+                val frames = (0 until refresh * 10).count { pacer.frame(it * 1_000_000_000L / refresh) }
+                assertEquals("fps=$rate refresh=$refresh", minOf(rate, refresh) * 10, frames)
+            }
+        }
+    }
 }

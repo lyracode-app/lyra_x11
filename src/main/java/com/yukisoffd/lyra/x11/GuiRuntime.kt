@@ -38,7 +38,7 @@ data class GuiOptions(
 ) {
     init {
         require(width in 320..3840 && height in 240..2160 && width.toLong() * height <= 8_294_400)
-        require(framesPerSecond in 5..60)
+        require(framesPerSecond in 5..120) { "fps must be between 5 and 120" }
         require(desktopCommand.isNotBlank() && '\u0000' !in desktopCommand)
     }
 }

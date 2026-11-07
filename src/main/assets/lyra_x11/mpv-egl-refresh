@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+if ! command -v mpv >/dev/null 2>&1 || ! command -v cc >/dev/null 2>&1; then
+    printf '%s\n' 'Install mpv and a C toolchain with EGL headers (Debian: gcc libc6-dev libegl-dev).' >&2
+    exit 127
+fi
+
+helper_dir=$(dirname -- "$0")
+temporary=$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/lyra-mpv.XXXXXX")
+trap 'rm -f -- "$temporary/egl-refresh.so"; rmdir -- "$temporary"' EXIT
+cc -shared -fPIC -O2 -o "$temporary/egl-refresh.so" "$helper_dir/mpv-egl-refresh.c" -lEGL -ldl -pthread
+LD_PRELOAD="$temporary/egl-refresh.so${LD_PRELOAD:+:$LD_PRELOAD}" \
+    mpv --gpu-api=opengl --gpu-context=x11egl "$@"

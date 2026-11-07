@@ -24,6 +24,12 @@ PATCHES = [1, 2, 4, 5, 6, 8, 9, 10]
 def run(*args, **kwargs):
     subprocess.run([str(a) for a in args], check=True, **kwargs)
 
+def apply_source_patch(virgl, patch):
+    patch_tool = shutil.which('patch')
+    if not patch_tool and sys.platform == 'win32':
+        patch_tool = str(Path(shutil.which('git')).resolve().parents[1] / 'usr/bin/patch.exe')
+    run(patch_tool or 'patch', '--batch', '--forward', '-p1', '-i', patch, cwd=virgl)
+
 def replace(path, old, new, count=-1):
     text = path.read_text(encoding='utf-8')
     if old not in text:
@@ -41,10 +47,7 @@ def prepare(source):
     virgl = source / 'virglrenderer-1.3.0'
     for number in PATCHES:
         patch = next((HERE / 'patches').glob(f'{number:04d}-*.patch.beforehostbuild'))
-        patch_tool = shutil.which('patch')
-        if not patch_tool and sys.platform == 'win32':
-            patch_tool = str(Path(shutil.which('git')).resolve().parents[1] / 'usr/bin/patch.exe')
-        run(patch_tool or 'patch', '--batch', '--forward', '-p1', '-i', patch, cwd=virgl)
+        apply_source_patch(virgl, patch)
     (virgl / 'subprojects').mkdir(exist_ok=True)
     shutil.move(str(source / 'libepoxy-1.5.10'), str(virgl / 'subprojects' / 'libepoxy'))
     # A static subproject avoids packaging generic libepoxy/libvirgl SONAMEs that
@@ -106,6 +109,18 @@ def android_context_surfaces(virgl):
     replace(path, '   EGLContext egl_ctx = eglGetCurrentContext();\n   return (virgl_renderer_gl_context)egl_ctx;',
             '   return (virgl_renderer_gl_context)lyra_current;')
 
+def android_client_workers(virgl):
+    path = virgl / 'vtest/vtest_server.c'
+    if 'LYRA_VTEST_WORKER_START' in path.read_text(encoding='utf-8'):
+        return
+    apply_source_patch(virgl, HERE / 'patches/lyra-android-vtest-workers.patch')
+
+def gles_conditional_render(virgl):
+    path = virgl / 'src/vrend/vrend_renderer.c'
+    if 'vrend_emulated_render_condition_passes' in path.read_text(encoding='utf-8'):
+        return
+    apply_source_patch(virgl, HERE / 'patches/lyra-gles-conditional-render.patch')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ndk', required=True, type=Path)
@@ -120,6 +135,8 @@ def main():
     virgl = source / 'virglrenderer-1.3.0' if source.exists() else prepare(source)
     android_pbuffer(virgl)
     android_context_surfaces(virgl)
+    android_client_workers(virgl)
+    gles_conditional_render(virgl)
     egl_source = virgl / 'src/vrend/vrend_winsys_egl.c'
     if 'Reject desktop GL versions' not in egl_source.read_text(encoding='utf-8'):
         replace(egl_source, '   if (!egl->android_context_attributes) {',

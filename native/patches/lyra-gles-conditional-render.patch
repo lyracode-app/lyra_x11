@@ -1,0 +1,116 @@
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -807,6 +807,7 @@
+ 
+    uint32_t cond_render_q_id;
+    GLenum cond_render_gl_mode;
++   bool cond_render_skip;
+ 
+    struct vrend_image_view image_views[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
+    uint32_t images_used_mask[PIPE_SHADER_TYPES];
+@@ -4820,7 +4821,7 @@
+    GLbitfield bits = 0;
+    struct vrend_sub_context *sub_ctx = ctx->sub;
+ 
+-   if (ctx->in_error)
++   if (ctx->in_error || sub_ctx->cond_render_skip)
+       return;
+ 
+    if (ctx->ctx_switch_pending)
+@@ -4937,6 +4938,9 @@
+                                  surf->format);
+       return;
+    }
++
++   if (render_condition_enabled && sub_ctx->cond_render_skip)
++      return;
+ 
+    if (render_condition_enabled == false)
+       vrend_pause_render_condition(ctx, true);
+@@ -5948,6 +5952,9 @@
+          return EINVAL;
+       }
+    }
++
++   if (sub_ctx->cond_render_skip)
++      return 0;
+ 
+    if (ctx->ctx_switch_pending)
+       vrend_finish_context_switch(ctx);
+@@ -11356,6 +11363,9 @@
+       return;
+    }
+ 
++   if (info->render_condition_enable && ctx->sub->cond_render_skip)
++      return;
++
+    if (info->render_condition_enable == false)
+       vrend_pause_render_condition(ctx, true);
+ 
+@@ -12092,6 +12102,34 @@
+    }
+ }
+ 
++static bool vrend_can_emulate_render_condition(void)
++{
++   return vrend_state.use_gles && has_feature(feat_occlusion_query_boolean);
++}
++
++static bool vrend_emulated_render_condition_passes(const struct vrend_query *q, GLenum mode)
++{
++   GLuint result = GL_TRUE;
++
++   if (q->gltype != GL_ANY_SAMPLES_PASSED &&
++       q->gltype != GL_ANY_SAMPLES_PASSED_CONSERVATIVE &&
++       q->gltype != GL_SAMPLES_PASSED)
++      return true;
++
++   /* GLES has occlusion queries but generally lacks conditional rendering.
++    * A region query may use the whole framebuffer result. A no-wait query
++    * whose result is still pending is allowed to render unconditionally. */
++   if (mode == GL_QUERY_NO_WAIT || mode == GL_QUERY_BY_REGION_NO_WAIT) {
++      GLuint ready = GL_FALSE;
++      glGetQueryObjectuiv(q->id, GL_QUERY_RESULT_AVAILABLE, &ready);
++      if (!ready)
++         return true;
++   }
++
++   glGetQueryObjectuiv(q->id, GL_QUERY_RESULT, &result);
++   return result != 0;
++}
++
+ void vrend_render_condition(struct vrend_context *ctx,
+                             uint32_t handle,
+                             bool condition,
+@@ -12109,6 +12147,7 @@
+       }
+       ctx->sub->cond_render_q_id = 0;
+       ctx->sub->cond_render_gl_mode = 0;
++      ctx->sub->cond_render_skip = false;
+       return;
+    }
+ 
+@@ -12135,6 +12174,13 @@
+       virgl_warn("Unhandled condition %x\n", mode);
+    }
+ 
++   if (!has_feature(feat_gl_conditional_render) &&
++       !has_feature(feat_nv_conditional_render) &&
++       vrend_can_emulate_render_condition()) {
++      ctx->sub->cond_render_skip = !vrend_emulated_render_condition_passes(q, glmode);
++      return;
++   }
++
+    ctx->sub->cond_render_q_id = q->id;
+    ctx->sub->cond_render_gl_mode = glmode;
+    if (has_feature(feat_gl_conditional_render))
+@@ -12309,7 +12355,8 @@
+       set_format_bit(&caps->v1.vertexbuffer, VIRGL_FORMAT_R11G11B10_FLOAT);
+ 
+    if (has_feature(feat_nv_conditional_render) ||
+-       has_feature(feat_gl_conditional_render))
++       has_feature(feat_gl_conditional_render) ||
++       vrend_can_emulate_render_condition())
+       caps->v1.bset.conditional_render = 1;
+ 
+    if (has_feature(feat_indep_blend))

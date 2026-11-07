@@ -50,6 +50,7 @@ internal class X11OverlayWindow(private val context: Context, private val sessio
         val height = minOf((width.toFloat() * target.options.height / target.options.width).toInt() + dp(48), metrics.heightPixels - dp(40))
         val layout = layout(width, height).apply {
             x = (metrics.widthPixels - width) / 2; y = dp(48)
+            if (target.options.framesPerSecond > 60) preferredRefreshRate = target.options.framesPerSecond.toFloat()
         }
         val panel = object : LinearLayout(context) {
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {

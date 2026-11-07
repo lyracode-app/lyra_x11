@@ -13,7 +13,9 @@ Sources, patches, licenses and build recipe are kept here. No Termux runtime, dr
 
 Additional deterministic edits in `build_renderer.py`: build libepoxy as a static Meson subproject; use Android's default EGL display; use an independent 1×1 pbuffer for every rendering/fence context instead of requiring surfaceless extensions; handle EGL 1.4 GLES context attributes without pretending higher minor versions are available; add the isolated `--lyra-probe` mode and immediate logging. Termux's conservative dual-source blend workaround and S3TC decompression are retained.
 
-The GLES backend rejects desktop GL 4.x/3.3 context requests instead of relying on vendor EGL to reject them. This avoids an emulator EGL failure while preserving real GLES 3.0/3.1/3.2 capability checks. Renderer crash diagnostics include library-relative native offsets.
+The GLES backend rejects desktop GL 4.x/3.3 context requests instead of relying on vendor EGL to reject them. This avoids an emulator EGL failure while preserving real GLES 3.0/3.1/3.2 capability checks. `LYRA_VREND_FRAMEBUFFER` records the bound draw framebuffer and its status on `GL_INVALID_FRAMEBUFFER_OPERATION`.
+
+On a GLES host with occlusion queries, VirGL implements conditional drawing, clears, and blits when the host lacks native conditional rendering. Mesa requires this capability for guest desktop OpenGL 3.0. The guest profile still depends on the host's other capabilities. In the guest, `eglinfo -B -p x11` reports the actual desktop and GLES profiles and their renderers on the X11 path.
 
 ## Rebuild
 
@@ -28,10 +30,17 @@ Linux uses the NDK's `linux-x86_64` host toolchain; Windows uses `windows-x86_64
 
 ## Runtime contract and limits
 
-Each GUI session owns one server process with `--no-fork --multi-clients --use-egl-surfaceless --use-gles --socket-path <private socket>`. Guest Mesa clients use `GALLIUM_DRIVER=virpipe`, `LIBGL_ALWAYS_SOFTWARE=1` (the Mesa software loader selects the remote virpipe driver), and `VTEST_SOCKET_NAME`. No GL version or extension override is fabricated. Actual `glxinfo -B` must identify VirGL before these exports reach the desktop/apps. AUTO falls back; explicit VIRGL fails with the diagnostic log.
+Each GUI session owns a vtest listener with `--use-egl-surfaceless --use-gles --socket-path <private socket>`. Each connection initializes EGL in a separate worker. If the worker exits on a native signal, the listener logs `LYRA_VTEST_WORKER_EXIT` with the PID and signal and keeps accepting connections. Workers terminate with the listener when the GUI session closes. Context fences still retire normally. Only legacy context-zero fences enter the native FD export table.
+
+Guest Mesa clients use `GALLIUM_DRIVER=virpipe`, `LIBGL_ALWAYS_SOFTWARE=1` (the Mesa software loader selects virpipe), and `VTEST_SOCKET_NAME`. Guest validation prefers a surfaceless EGL pixel check, with a context check through `eglinfo` when Python 3 is unavailable. The GLX compatibility path still handles `X_GetImage BadMatch` with a bounded `glxgears -info` run. Diagnostics record which probe ran. On validation failure, AUTO uses software and explicit VIRGL stops with retry controls and the diagnostic log.
 
 Android EGL must pass an isolated GLES 3 probe; known software renderers are rejected for production AUTO. This path is suitable for Mali/Immortalis as well as other vendor EGL implementations; Turnip is not used. It accelerates compatible guest OpenGL work, independently of the native X11 / VNC display selection. Guest application readback may remain; Vulkan, generic guest DRI3 drivers and hardware video decoding are not implemented.
 
-`NativeMediaTest` checks the actual executable, EGL context and two sequential vtest clients under the application UID. A successful emulator test does not establish compatibility or performance on a particular phone/GPU.
+`NativeMediaTest` checks the executable, EGL context, isolation after an invalid CLEAR and a worker killed by `SIGKILL`, acceptance of a new connection after the fault, and worker cleanup on listener shutdown. Phone GPU compatibility and performance require device testing.
+
+## Additional rendering paths
+
+- For an Adreno prototype, start with a Turnip build for KGSL that matches the guest architecture and libc. First verify that the application UID can use `/dev/kgsl-3d0` and that `vulkaninfo` identifies the GPU. Then verify Vulkan swapchain presentation in the embedded X server and GLX/EGL drawing through Zink. The embedded server currently imports linear FDs and Android hardware buffers through DRI3. A successful device probe leaves the buffer import and synchronization paths to verify. Older Adreno devices need a supported Vulkan implementation for Zink. Freedreno's Gallium OpenGL path would need separate KGSL and X11 validation. [Mesa Android build](https://docs.mesa3d.org/android.html) · [Turnip KGSL implementation](https://raw.githubusercontent.com/mirror/mesa/main/src/freedreno/vulkan/tu_knl_kgsl.cc) · [Zink requirements](https://docs.mesa3d.org/drivers/zink.html)
+- For Mali and Immortalis, prototype an explicit ANGLE Vulkan backend in the isolated VirGL renderer, using pinned EGL and GLES libraries. Verify that ANGLE identifies the device's Vulkan GPU, then test guest GLX and EGL with actual frame content. The guest continues to use VirGL for OpenGL. Exposing Vulkan to guest applications would require a separate driver and presentation path. [ANGLE Android setup](https://github.com/google/angle/blob/main/doc/DevSetupAndroid.md) · [Termux ANGLE build](https://github.com/termux/termux-packages/blob/master/packages/angle-android/build.sh)
 
 Embedded X11 display sources, JNI, AHardwareBuffer renderer and build recipe: [xserver/README.md](xserver/README.md).

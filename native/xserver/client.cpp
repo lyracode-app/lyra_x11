@@ -132,6 +132,17 @@ JNI(void) METHOD(nativeKey)(JNIEnv*,jobject,jlong ptr,jint sym,jboolean down) {
     auto *c=(Client*)ptr;if(!c)return;lorieEvent e{};e.type=EVENT_KEYSYM;e.keysym.sym=sym;e.keysym.down=down;
     pthread_mutex_lock(&c->writer);sendEvent(c,e);pthread_mutex_unlock(&c->writer);
 }
+JNI(void) METHOD(nativeScanCode)(JNIEnv*, jobject, jlong ptr, jint code, jboolean down) {
+    auto *client = (Client*)ptr;
+    if (!client || code < 1 || code > 247) return;
+    lorieEvent event{};
+    event.type = EVENT_KEY;
+    event.key.key = code + 8; // XKB's evdev map reserves the first eight keycodes.
+    event.key.state = down;
+    pthread_mutex_lock(&client->writer);
+    sendEvent(client, event);
+    pthread_mutex_unlock(&client->writer);
+}
 JNI(void) METHOD(nativePointer)(JNIEnv*,jobject,jlong ptr,jint x,jint y,jint buttons) {
     auto *c=(Client*)ptr;if(!c)return;pthread_mutex_lock(&c->writer);
     lorieEvent e{};e.type=EVENT_MOUSE;e.mouse.x=x;e.mouse.y=y;sendEvent(c,e);
@@ -144,6 +155,21 @@ JNI(void) METHOD(nativePointer)(JNIEnv*,jobject,jlong ptr,jint x,jint y,jint but
         e.mouse.y=(buttons&8)?-120:((buttons&16)?120:0);sendEvent(c,e);
     }
     c->buttons=buttons;pthread_mutex_unlock(&c->writer);
+}
+JNI(void) METHOD(nativeScroll)(JNIEnv*, jobject, jlong ptr, jint x, jint y, jfloat horizontal, jfloat vertical) {
+    auto *client = (Client*)ptr;
+    if (!client) return;
+    pthread_mutex_lock(&client->writer);
+    lorieEvent event{};
+    event.type = EVENT_MOUSE;
+    event.mouse.x = x;
+    event.mouse.y = y;
+    sendEvent(client, event);
+    event.mouse.detail = 4; // Lorie scroll packets use 120 units per wheel step.
+    event.mouse.x = horizontal * 120;
+    event.mouse.y = -vertical * 120;
+    sendEvent(client, event);
+    pthread_mutex_unlock(&client->writer);
 }
 JNI(jlongArray) METHOD(nativeStats)(JNIEnv *env,jobject,jlong ptr) {
     auto *c=(Client*)ptr; jlong v[12]{};

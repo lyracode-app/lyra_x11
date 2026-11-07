@@ -12,9 +12,11 @@ import com.yukisoffd.lyra.x11.nativebackend.NativeDisplay
 import com.yukisoffd.lyra.x11.X11Activity
 import com.yukisoffd.lyra.x11.GuestBootstrap
 import com.yukisoffd.lyra.x11.UnixRfbTransport
+import com.yukisoffd.lyracode.data.AppSettings
 import com.yukisoffd.lyracode.debian.ProotCommandProcess
 import com.yukisoffd.lyracode.debian.ProotLinuxManager
 import com.yukisoffd.lyracode.debian.ProotOperationPhase
+import com.yukisoffd.lyracode.localizedContext
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.File
@@ -29,6 +31,10 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** Host glue is compiled with :app, so PRoot implementation details remain internal to :app. */
 class LyraX11Activity : X11Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(newBase.localizedContext(AppSettings(newBase).languageMode))
+    }
+
     override fun obtainSessions(): GuiSessions = getSessions(applicationContext)
 
     companion object {

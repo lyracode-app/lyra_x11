@@ -109,7 +109,7 @@ abstract class X11Activity : Activity() {
         sessionPicker = Spinner(this)
         controls.addView(sessionPicker)
         configuration = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, dp(8), dp(8)) }
-        environmentPicker = Spinner(this)
+        environmentPicker = Spinner(this).apply { contentDescription = getString(R.string.x11_environment) }
         configuration.addView(environmentPicker)
         val commandRow = LinearLayout(this)
         command = AutoCompleteTextView(this).apply {
@@ -119,7 +119,8 @@ abstract class X11Activity : Activity() {
         commandRow.addView(button(getString(R.string.x11_presets)) { choosePreset() })
         configuration.addView(commandRow)
         val row = LinearLayout(this)
-        resolution = Spinner(this); fps = Spinner(this)
+        resolution = Spinner(this).apply { contentDescription = getString(R.string.x11_resolution) }
+        fps = Spinner(this).apply { contentDescription = getString(R.string.x11_frame_rate) }
         row.addView(resolution, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(fps, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(button(getString(R.string.x11_start)) { startDesktop() })
@@ -150,13 +151,15 @@ abstract class X11Activity : Activity() {
         refresh()
         val requested = sessions.snapshot().firstOrNull { it.id == selectedId }
         val showForm = intent.getStringExtra(EXTRA_SESSION) == null && matching == null && savedInstanceState == null
-        configuration.visibility = if (showForm || requested == null) View.VISIBLE else View.GONE
+        configuration.visibility = if (showForm || requested == null || requested.virglValidationFailed) View.VISIBLE else View.GONE
         expand(savedInstanceState?.getBoolean("expanded") ?: (showForm || requested?.status != GuiStatus.CONNECTED))
         sessionPicker.onItemSelectedListener = selected { position ->
             listed.getOrNull(position)?.let {
                 if (selectedId != it.id) {
                     selectedId = it.id; display.session = it; configuration.visibility = View.GONE
                     if (it.status == GuiStatus.CONNECTED) expand(false)
+                    if (it.virglValidationFailed) reopenGraphicsProfile(it)
+                    updateStatus()
                 }
                 updateVisibility()
             }
@@ -191,8 +194,8 @@ abstract class X11Activity : Activity() {
         sizes = (listOf("1280×720", "1600×900", "1920×1080", "1024×768", "2560×1440", "3840×2160") + "${profile.width}×${profile.height}").distinct()
         resolution.adapter = adapter(sizes)
         resolution.setSelection(sizes.indexOf("${profile.width}×${profile.height}"))
-        rates = (listOf(30, 60, 15) + profile.framesPerSecond).distinct()
-        fps.adapter = adapter(rates.map { "$it FPS" }); fps.setSelection(rates.indexOf(profile.framesPerSecond))
+        rates = (listOf(30, 60, 90, 120, 15) + profile.framesPerSecond).distinct()
+        fps.adapter = adapter(rates.map { getString(R.string.x11_fps_value, it) }); fps.setSelection(rates.indexOf(profile.framesPerSecond))
         audio.setSelection(profile.audio.ordinal); graphics.setSelection(profile.graphics.ordinal)
         displayBackend.setSelection(profile.displayBackend.ordinal)
     }
@@ -232,14 +235,32 @@ abstract class X11Activity : Activity() {
             if (index >= 0) {
                 sessionPicker.setSelection(index); selectedId = current[index].id; display.session = current[index]
                 if (current[index].status == GuiStatus.CONNECTED && connectedSeen.add(current[index].id)) expand(false)
+                if (current[index].status == GuiStatus.ERROR) {
+                    if (current[index].virglValidationFailed) reopenGraphicsProfile(current[index])
+                    expand(true)
+                }
             } else {
                 selectedId = null; display.session = null; configuration.visibility = View.VISIBLE; expand(true)
             }
-            status.text = display.session?.let { "${it.title} · ${statusName(it.status)}" }.orEmpty()
-            status.visibility = if (display.session?.status in listOf(null, GuiStatus.CONNECTED)) View.GONE else View.VISIBLE
+            updateStatus()
             updateVisibility()
         }
         display.postInvalidateOnAnimation()
+    }
+    private fun reopenGraphicsProfile(session: GuiSession) {
+        val position = environments.indexOfFirst { it.id == session.environment.id }
+        if (position < 0) return
+        environmentPicker.setSelection(position)
+        if (boundEnvironment != session.environment.id) loadProfile(session.environment.id)
+        configuration.visibility = View.VISIBLE
+    }
+    private fun updateStatus() {
+        val current = display.session
+        status.text = current?.let {
+            val summary = if (it.virglValidationFailed) getString(R.string.x11_virgl_retry) else statusName(it.status)
+            "${it.title} · $summary"
+        }.orEmpty()
+        status.visibility = if (current?.status in listOf(null, GuiStatus.CONNECTED)) View.GONE else View.VISIBLE
     }
     private fun statusName(value: GuiStatus) = getString(when (value) {
         GuiStatus.STARTING -> R.string.x11_starting; GuiStatus.CONNECTED -> R.string.x11_connected
@@ -262,6 +283,13 @@ abstract class X11Activity : Activity() {
     }
     private fun updateVisibility() {
         sessions.snapshot().forEach { it.setViewerVisible(this, hasWindowFocus() && it.id == selectedId) }
+        val rate = display.session?.takeUnless { it.closed.get() }?.options?.framesPerSecond ?: 0
+        val preferredRate = if (rate > 60 && hasWindowFocus()) rate.toFloat() else 0f
+        val attributes = window.attributes
+        if (attributes.preferredRefreshRate != preferredRate) {
+            attributes.preferredRefreshRate = preferredRate
+            window.attributes = attributes
+        }
     }
     private fun showOverlay(sessionId: String) {
         if (!Settings.canDrawOverlays(this)) {

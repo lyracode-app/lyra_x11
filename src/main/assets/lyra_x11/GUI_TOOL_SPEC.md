@@ -1,106 +1,136 @@
-# Lyra Linux GUI 工具规范 v4
+# Lyra Linux GUI Tool Specification v4
 
-此规范适用于 Lyra 应用内的 `linux_gui` 和 `proot_command`，供 AI 配置、诊断 Linux 图形环境及展示应用。
+This specification guides AI use of `linux_gui` and `proot_command` to set up and diagnose Linux GUI environments and display applications inside Lyra.
 
-## 必须遵守的会话契约
+## Session contract
 
-- 首次安装、修复或启动 GUI 前调用 `linux_gui(action="guide")`，用 `list` 获取环境与会话，明确 `linux_id`。不同 rootfs 必须分别检查、安装，不能将一个环境的软件、DISPLAY 或凭据用于另一个环境。
-- 使用 `proot_command` 读取 `/etc/os-release`，分别检查 `xdpyinfo`、`dbus-run-session` 及拟用桌面/窗口管理器。原生后端的 X server、XKB 数据和 cookie 由 APK 提供，Linux 不需要安装 X server。只补齐缺失依赖，不要一次安装多个桌面。
-- 默认 `display_backend="auto"` 优先使用内嵌 X.Org/Lorie DDX；`native` 强制原生；`vnc` 选择 TigerVNC 备用。自动回退仅发生在执行桌面/应用命令之前，避免重复执行用户命令。以 `status.display_backend.backend` 为实际后端。
-- 原生后端在 Android 独立进程运行。每个环境共享一个 `/tmp/.X11-unix` 目录挂载，每个会话使用独立 DISPLAY、Xauthority 和私有控制通道。不开放 X11 TCP，不需要 VNC 密码。X11 客户端必须通过 cookie 认证；不要使用 `-ac`、`xhost +` 或修改认证代码。
-- 只有需要 VNC 备用时才检查/安装 `Xtigervnc` 或 `Xvnc` 以及 `xauth`。备用后端禁用 RFB TCP，使用权限 0600 的应用私有 Unix socket，无 VNC 密码。不要安装 TightVNC、x11vnc、Vino、中继或显示管理器。
-- 使用 `linux_gui(action="start")` 创建会话。不要手工启动替代 X server、重用旧 display/cookie/socket，或把另一个环境的凭据用于当前环境。
-- Lyra 自动启动 session D-Bus，设置 DISPLAY、XAUTHORITY、XDG_RUNTIME_DIR。不要启动 systemd、显示管理器、system D-Bus，或使用 `-ac` / `xhost +` 来绕过 X11 认证。
+- Before initial setup, repair, or launch, call `linux_gui(action="guide")`. Use `list` to identify the environment and its `linux_id`, and to inspect existing sessions. Check and install packages separately in each rootfs. Keep DISPLAY, credentials, and sockets scoped to their own sessions.
+- Use `proot_command` to read `/etc/os-release`. Check `xdpyinfo`, `dbus-run-session`, and the selected desktop or window manager. The APK supplies the native X server, XKB data, and authentication cookie. Install only missing components for the chosen setup.
+- `display_backend="auto"` prefers the embedded X.Org/Lorie DDX. `native` requires it and `vnc` selects the TigerVNC fallback. Automatic fallback happens before the desktop or application command runs, so the command executes only once. Read `status.display_backend.backend` for the active backend.
+- The native server runs in a separate Android process. Sessions in the same environment share a mount at `/tmp/.X11-unix` and have individual DISPLAY values, Xauthority files, and private control sockets. X11 TCP is disabled. Use the session cookie for X11 authentication. Never use `-ac`, `xhost +`, or authentication patches.
+- Check or install `Xtigervnc` or `Xvnc` and `xauth` only for the VNC fallback. RFB uses a private Unix socket with mode 0600 and no password. Keep TightVNC, x11vnc, Vino, relays, and display managers out of this setup.
+- Create sessions through `linux_gui(action="start")`. Let Lyra manage the X server and its display, cookie, and socket.
+- Lyra starts the session D-Bus and sets `DISPLAY`, `XAUTHORITY`, and `XDG_RUNTIME_DIR`. Use that session bus. Avoid starting systemd, a display manager, or a system D-Bus.
 
-## 最小安装方案
+## Minimal installation
 
-先确认发行版和已有软件。以下命令仅在缺少对应组件时执行；使用非交互参数，安装完成后再次 `command -v` 验证，检查实际退出码及日志。
+Identify the distribution and installed components first. Run only the commands needed to fill gaps. Use noninteractive package installation, then verify the commands with `command -v` and inspect exit codes and logs.
 
-### Debian / Ubuntu（推荐 LXDE）
+### Debian and Ubuntu
 
-共同依赖：
+Install missing shared dependencies from the following list.
 
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends x11-utils dbus-x11 fonts-dejavu-core
 
-只选择一种用途：
+Choose one setup.
 
-- LXDE 桌面：`apt-get install -y --no-install-recommends lxde-core lxterminal`，预设 `lxde`（`startlxde`）。
-- 应用预览：`apt-get install -y --no-install-recommends openbox`，传入 `app_command`。应用自己的 GTK/Qt/Python 等依赖按项目要求安装。
-- 用户明确选用 Xfce：`apt-get install -y --no-install-recommends xfce4`，预设 `xfce`（`startxfce4`）。
-- 用户明确选用 LXQt：安装发行版的 `lxqt-core`，预设 `lxqt`（`startlxqt`）；先检查当前发行版是否提供该包。
-- 仅窗口管理器：`openbox`，预设 `openbox`（`openbox-session`）。
+- LXDE is the recommended desktop. Use `apt-get install -y --no-install-recommends lxde-core lxterminal` and the `lxde` preset (`startlxde`).
+- For an application preview, use `apt-get install -y --no-install-recommends openbox` and pass `app_command`. Install the application's own GTK, Qt, Python, or other dependencies as required by the project.
+- If the user selects Xfce, use `apt-get install -y --no-install-recommends xfce4` and the `xfce` preset (`startxfce4`).
+- If the user selects LXQt, check whether the current distribution provides `lxqt-core`. Install it and use the `lxqt` preset (`startlxqt`).
+- For a window manager alone, install `openbox` and use the `openbox` preset (`openbox-session`).
 
-### Alpine（启用与当前版本相同的 community 仓库）
+### Alpine
+
+Enable the `community` repository for the installed Alpine release.
 
     apk add xdpyinfo dbus font-dejavu openbox
 
-默认使用 `openbox` 预设或 `app_command`。需要完整桌面时，按用户选择再安装已确认可用的 `xfce4` 等包，不要混入其他 Alpine 版本或 edge 仓库。
+Use the `openbox` preset or `app_command` by default. For a full desktop, install the user's choice from packages confirmed available for the same Alpine release. Keep repositories from other releases and Edge out of the setup.
 
-### Arch / Arch ARM
+### Arch and Arch ARM
 
     pacman -S --needed --noconfirm xorg-xdpyinfo dbus ttf-dejavu openbox
 
-先使用 `openbox` 预设或应用预览。不要为了 GUI 做部分系统升级；若仓库/系统版本不一致，先报告包管理器的实际错误。
+Start with `openbox` or an application preview. Avoid partial system upgrades. If the repositories and system are out of sync, report the package manager's actual error first.
 
-### Fedora 43+
+### Fedora 43 and later
 
     dnf install -y xdpyinfo dbus-x11 dejavu-sans-fonts openbox
 
-先使用 `openbox` 预设或应用预览。较旧 Fedora 的 TigerVNC 包名可能不同，应核对发行版软件源后再安装。
+Start with `openbox` or an application preview. Verify TigerVNC package names against the repositories for the installed Fedora release.
 
-### 其他发行版
+### Other distributions and VNC fallback
 
-根据本发行版官方包资料找到提供上述命令的包。只安装 xdpyinfo、session D-Bus、字体及所选桌面/窗口管理器。不要把 Debian 包名或安装脚本直接用于其他发行版。
+Use the distribution's official package information to find `xdpyinfo`, session D-Bus, fonts, and the selected desktop or window manager. Use commands and package names for that distribution.
 
-VNC 备用依赖按需安装：Debian/Ubuntu `tigervnc-standalone-server xauth`；Alpine `tigervnc xauth`；Arch `tigervnc xorg-xauth`；Fedora 按发行版确认 `tigervnc-x11-server xorg-x11-xauth`。原生后端启动正常时无需这些软件。
+Install VNC packages only when needed. Debian and Ubuntu use `tigervnc-standalone-server xauth`, Alpine uses `tigervnc xauth`, and Arch uses `tigervnc xorg-xauth`. On Fedora, check `tigervnc-x11-server xorg-x11-xauth` against the installed release.
 
-## 原生显示管线与诊断
+## Native display and diagnostics
 
-- 原生 DDX 通过私有 Unix 控制 socket 传递共享缓冲区句柄，Android 使用 AHardwareBuffer/EGLImage 和 SurfaceView 显示，没有 RFB 编码、解码、全帧 Bitmap 上传。Linux 应用和窗口管理器仍使用标准 X11 协议。
-- `display_backend.transport=ahardwarebuffer_eglimage` 且 `ahb_frames` 增长才表示实际走了 AHardwareBuffer。`shared_memory_texture_upload` 表示共享内存纹理上传兼容路径，不能描述为零拷贝。`vnc_encoding=true` 表示正在使用 VNC 备用。
-- 同一会话可同时显示在主页面和悬浮窗，第二个 Surface 使用 GPU 镜像。不同会话有独立服务器、输入和缓冲区。隐藏所有 Surface 后停止画面呈现，Linux 应用、音频保留运行。
-- `screenshot_readbacks` 只应在主动截图时增长；普通显示不应 CPU 读回。原生截图需要先显示会话，按完整桌面分辨率离屏合成并按需 GPU 读回；悬浮窗大小不影响截图分辨率，截图不参与持续传输。
-- 原生 X11 减少桌面传输开销，不代表所有 guest 绘制都使用 GPU。普通 X11 2D 绘制仍可能由 CPU 执行；通用发行版 Mesa virpipe 也可能有应用级读回。现阶段不承诺任意 Linux Vulkan、DRI3 驱动或视频硬解。
-- 若自动回退，先看 `fallback_reason` 和会话日志，再按需补齐 TigerVNC 备用依赖。原生运行中断开会明确报错，不会悄悄重跑应用命令。也可新建 `display_backend="vnc"` 会话排查。
+- The native DDX passes shared buffer handles over a private Unix control socket. Android displays them with AHardwareBuffer, EGLImage, and SurfaceView. Linux applications and window managers use the standard X11 protocol. This transport bypasses RFB encoding, decoding, and full-frame bitmap uploads.
+- Verify actual AHardwareBuffer use with `display_backend.transport=ahardwarebuffer_eglimage` and an increasing `ahb_frames` counter. `shared_memory_texture_upload` uses shared-memory texture uploads. `vnc_encoding=true` identifies the VNC fallback.
+- A session can appear on the main page and in a floating window. A second surface uses GPU mirroring. Each session owns its server, input, and buffers. Hiding all surfaces suspends presentation while Linux applications and audio continue.
+- `screenshot_readbacks` should increase only for explicit screenshots. Show the native session before capturing it. Lyra composites at the full desktop resolution and reads the frame back on demand, independent of the floating window size.
+- Native X11 reduces display transport overhead. Ordinary X11 2D drawing may still use the CPU, and distribution Mesa builds using virpipe may still read pixels back per application. Check actual capabilities before claiming support for guest Vulkan, DRI3 drivers, or hardware video decoding.
+- If automatic fallback occurs, read `fallback_reason` and the session log before adding TigerVNC packages. A native connection that fails at runtime reports an error and leaves application restart to the user. Use a new `display_backend="vnc"` session for comparison when needed.
 
-## 启动与便携预览
+## Starting sessions and previews
 
-- 桌面示例：`linux_gui(action="start", linux_id="debian", preset="lxde", mode="fullscreen", width=1920, height=1080, fps=30)`。
-- GUI 开发预览示例：`linux_gui(action="start", linux_id="debian", app_command="cd /workspace/demo && python3 main.py", mode="overlay")`。Lyra 自动在同一 session D-Bus 内启动 Openbox 和应用，原有桌面会话不受影响。
-- `app_command` 可以是应用的长期运行命令，允许交互；不通过命令行工具的后台模式启动。不要使用无头浏览器或截图命令代替可交互 GUI。
-- 悬浮窗需要 Android“显示在其他应用上层”权限。先查看 `guide` / `list` 的 `overlay_permission`；缺失时可调用 `request_overlay_permission` 打开系统授权页，用户授权后再调用 `start` / `show`。不能假设已授权。
-- `start` 返回 session_id、状态和实际 DISPLAY/XAUTHORITY。`starting` 表示仍在启动，必须检查 `status` 至 `connected`，并确认 `has_frame=true` 后才能报告画面已就绪。
-- 同一会话里的多个 X11 窗口由 Linux 窗口管理器处理。多个环境/会话可同时运行；`show` 选择需要展示的会话。不要把关闭悬浮显示与停止会话混淆：`hide` 保留后台会话，`stop` 停止其 GUI 与对应 PRoot supervisor。
-- `screenshot` 直接保存当前 Linux 帧缓冲为 PNG，不启动额外截图软件，不包含 Android 工具栏。用户也可以使用悬浮窗或全屏工具栏的截图按钮。图像保存位置由返回值给出。
-- 对当前 desktop 会话启动额外程序，可在同一 `linux_id` 的 `proot_command` 使用 `status` 返回的 export 命令；不要把会话 cookie 内容粘贴到对话里。
+- Desktop example `linux_gui(action="start", linux_id="debian", preset="lxde", mode="fullscreen", width=1920, height=1080, fps=30)`.
+- Application preview example `linux_gui(action="start", linux_id="debian", app_command="cd /workspace/demo && python3 main.py", mode="overlay")`. Lyra starts Openbox and the application under the same session D-Bus. Existing desktop sessions run independently.
+- `app_command` may be a long-running interactive command. Launch it through `linux_gui` and keep it available for interaction. A headless browser or shell screenshot cannot substitute for a requested interactive preview.
+- Floating windows require Android overlay permission. Check `overlay_permission` in `guide` or `list`. Use `request_overlay_permission` to open system settings when needed. Wait for the user to grant permission and verify it before calling `start` or `show`.
+- `start` returns `session_id`, status, and the session's `DISPLAY` and `XAUTHORITY`. When it returns `starting`, check `status` until the session is `connected` with `has_frame=true` before reporting that the display is ready.
+- The Linux window manager handles multiple windows in one session. Several environments and sessions can run at once. `show` selects a session to display, `hide` keeps it running in the background, and `stop` terminates its GUI and associated PRoot supervisor.
+- `screenshot` saves a PNG of the current Linux framebuffer directly and returns its location. The floating and full-screen toolbars offer the same capture function. The PNG contains the Linux desktop without Android controls.
+- To launch another program on an existing desktop, use the same `linux_id` with `proot_command` and run the `environment_exports` returned by `status`. Keep the contents of Xauthority cookies out of the conversation.
 
-## 排错顺序
+## Troubleshooting order
 
-1. `linux_gui(action="status", session_id=...)` 获取有界日志和状态。
-2. 先处理缺失命令、桌面命令不存在、Xvnc 版本/选项不兼容、display 占用、应用启动异常；禁止先改认证或重装整个桌面。
-3. 私有通道若报告 VNC 密码认证，说明连接/会话不是此版本管理的正常通道；停止旧会话并重新创建，不修改 VNC 二进制或放宽系统配置。
-4. “Could not find any render nodes / Failed to initialize DRI3”本身不表示 RFB 连接失败，也不表示整个桌面不可用。以实际 `has_frame`、应用日志与画面为准。
-5. 1080p/30 FPS 可以作为用户已验证设备的设置；其他设备从 720p/30 FPS 开始。Android 画面合成不代表 Linux OpenGL/Vulkan 已获得 GPU 加速。按下述媒体诊断确认实际后端。
+1. Call `linux_gui(action="status", session_id=...)` for bounded logs and the current state.
+2. Check for missing programs, an invalid desktop command, incompatible Xvnc options or versions, an occupied DISPLAY, and application startup errors. Keep authentication intact and repair only the failing component.
+3. If the private channel asks for a VNC password, stop the stale or unmanaged session and create a Lyra session. Keep the server binaries and system authentication settings intact.
+4. Use `has_frame`, application logs, and the actual image to assess the display when logs report “Could not find any render nodes” or “Failed to initialize DRI3.”
+5. Use 1080p at 30 FPS on devices where the user has verified that configuration. Start at 720p and 30 FPS on other devices. Check the media diagnostics below before claiming guest GPU acceleration.
 
-## 音频输出
+## Audio
 
-- `start` 支持 `audio="auto" | "pulseaudio" | "pipewire" | "off"`。省略时使用该环境的记忆设置；首次默认 auto，优先 PulseAudio，失败后尝试完整 PipeWire 栈。不要同时安装两套栈来试错，优先复用已有工具。
-- Lyra 为每个会话创建独立音频服务及私有 Unix socket/FIFO。Linux 服务混音为 48 kHz、双声道 S16LE，Android AudioTrack 播放并交给 Android 路由至扬声器、蓝牙或 USB。无需音频密码、TCP 端口、systemd、Linux ALSA 声卡、root 或录音权限。
-- Debian/Ubuntu 推荐只补齐 `pulseaudio pulseaudio-utils`。ALSA 应用另需 `libasound2-plugins`。示例：`apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins`。先查询包是否存在并检查已有服务；不修改全局 PulseAudio/ALSA 配置，不启动系统服务。
-- 用户已使用 PipeWire 时，检查 `pipewire`、`pipewire-pulse`、`wireplumber`（0.5+）及 `libpipewire-module-pipe-tunnel`、SPA audioconvert/support 模块。Debian/Ubuntu 对应 `pipewire pipewire-pulse wireplumber libspa-0.2-modules libpipewire-0.3-modules`，先核对当前源是否提供。Lyra 启动独立配置，关闭硬件枚举，不要求 systemd。旧 WirePlumber 0.4 环境优先选择 PulseAudio。
-- Alpine/Arch/Fedora 按本发行版官方包查找同名命令、pipe sink/tunnel 和 ALSA pulse 插件；PipeWire 的 Pulse 兼容包在 Fedora 名为 `pipewire-pulseaudio`，不可照搬 Debian 命令。
-- `status.media.audio_backend` 应为 pulseaudio 或 pipewire；`audio_output` 的 received_frames/written_frames 在播放时增长，output=playing 只表示已写入 Android 音频设备。不能凭服务进程存在便声称用户已听到声音。静音、系统音量、蓝牙路由及音频焦点仍需检查。
-- 使用 `linux_gui(action="audio", session_id=..., muted=true/false)` 或工具栏/悬浮窗按钮静音、恢复。切到其他应用不暂停声音；失去 Android 音频焦点时停止输出并丢弃旧积压，恢复后播放当前声音。长期失焦后可点“恢复声音”重新获取焦点。
-- 会话中的新应用继承音频变量。同一环境的 `proot_command` / 新终端必须先执行 `status.environment_exports`，它会 source `/run/lyra/<会话>/environment`。不要手写或沿用另一会话的 PULSE_SERVER/PIPEWIRE_REMOTE。升级前已运行的旧终端需重开一次，以获得新的 `/run/lyra` 稳定挂载。
-- 音频启动失败不会破坏当前可工作的图形桌面。先看 `status.media.guest_audio_log` 和 audio_output.error，再补齐指定组件并重建会话；不要安装远程音频服务器或开放 `auth-anonymous` TCP。匿名认证仅用于应用私有 Unix socket。
+- `start` accepts `audio="auto" | "pulseaudio" | "pipewire" | "off"`. If omitted, it uses the saved setting for the environment. The initial `auto` setting tries PulseAudio first, then a complete PipeWire stack. Prefer an existing stack and install only the missing components.
+- Lyra uses a per-session audio service and a private Unix socket and FIFO. The Linux service mixes stereo 48 kHz S16LE. Android AudioTrack sends it to the selected speaker, Bluetooth, or USB route. The bridge works without audio passwords, TCP, systemd, a Linux ALSA sound card, root, or recording permission.
+- On Debian and Ubuntu, fill in `pulseaudio pulseaudio-utils` as needed. Add `libasound2-plugins` for ALSA clients. An example is `apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins`. Check package availability and running services first. Keep global PulseAudio and ALSA configuration intact and use the session daemon.
+- If the user already runs PipeWire, check `pipewire`, `pipewire-pulse`, WirePlumber 0.5 or later, `libpipewire-module-pipe-tunnel`, and the SPA audioconvert and support modules. Debian and Ubuntu use `pipewire pipewire-pulse wireplumber libspa-0.2-modules libpipewire-0.3-modules` where available. Lyra supplies an independent configuration with hardware enumeration disabled. Prefer PulseAudio on WirePlumber 0.4 environments.
+- For Alpine, Arch, and Fedora, find the packages for the equivalent commands, pipe sink or tunnel, and ALSA Pulse plugin in the distribution's official repositories. Fedora uses `pipewire-pulseaudio` for Pulse compatibility.
+- Check `status.media.audio_backend` for `pulseaudio` or `pipewire`. During playback, `received_frames` and `written_frames` under `audio_output` should increase. `output=playing` confirms that audio was written to Android. Check mute, system volume, Bluetooth routing, and audio focus before reporting what the user can hear.
+- Mute or resume audio using `linux_gui(action="audio", session_id=..., muted=true/false)` or the toolbar buttons. Playback continues when switching apps. On loss of Android audio focus, the bridge stops output and discards stale audio. It resumes with current audio after focus returns. Use Resume audio to request focus again if needed.
+- New applications in the session inherit audio variables. For a new terminal or `proot_command` in the same environment, first run `status.environment_exports` to source `/run/lyra/<session>/environment`. Reopen terminals started before the upgrade to obtain the stable `/run/lyra` mount. Use the session exports for `PULSE_SERVER` and `PIPEWIRE_REMOTE`.
+- If audio startup fails, the graphical desktop can still run. Read `status.media.guest_audio_log` and `audio_output.error`, fill in the specific missing components, and recreate the session. Keep anonymous authentication confined to the private Unix socket.
 
-## GPU 加速
+## GPU acceleration
 
-- `start` 支持 `graphics="auto" | "virgl" | "software"`，首次默认 auto。应用打包独立的 Android EGL/GLES VirGL 服务（ARM64、x86_64），每会话一个进程和私有 vtest socket。Mali/Immortalis、Adreno 和 x86 GPU 均先检测 Android vendor EGL，不能仅由 CPU/手机型号推断兼容性。
-- Dimensity 9400/Immortalis 使用该 EGL/GLES 路径。不要安装面向 Adreno 的 Turnip，不写内核驱动、不访问受限 `/dev/dri`/`/dev/kgsl`，不修改 SELinux。
-- guest 必须有启用 VirGL/virpipe 的 Mesa 和 `glxinfo`、`timeout`。Debian/Ubuntu 推荐补齐 `libgl1-mesa-dri libglx-mesa0 mesa-utils coreutils`；Mesa 依赖版本必须来自同一发行版软件源。其他发行版查找 Mesa Gallium/GLX、mesa-utils/mesa-demos 与 coreutils。
-- Lyra 先运行隔离的 GLES 3 能力探测，再让 guest 使用 `GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 VTEST_SOCKET_NAME=...` 运行有超时的 `glxinfo -B`。这里 SOFTWARE=1 选择 Mesa 的软件加载入口，真正执行的是远端 virpipe；不能仅凭此变量判断是否为 CPU 渲染。
-- 只有 `status.media.graphics=virgl` 且 guest_graphics_log 的 OpenGL renderer string 包含 virgl 才表示验证通过。host_gpu 展示 Android 实际 renderer/vendor/version。AUTO 失败后去掉 GPU 变量、回退现有软件显示并保留原因；强制 virgl 验证失败会明确报错。不要伪造 `MESA_GL_VERSION_OVERRIDE` / GLES 扩展来使检测“成功”。
-- 成功后应用程序继承这些变量；额外命令仍需 source `environment_exports`。每个环境的 Mesa 单独适配。发行版 Mesa 未编译 virpipe 时，报告实际错误并选择 software，不能把安装任意 Mesa 包说成已加速；需要使用该发行版可维护的启用 virgl/vtest 的 Mesa 构建。
-- 这条路径加速兼容的 Linux OpenGL 调用，与显示后端分别选择。原生 X11 通过共享 AHardwareBuffer 消除了 RFB 桌面传输；VNC 备用仍需编码/解码。guest OpenGL 的 virpipe 路径仍可能需要应用级读回。帧率设置是上限，实际性能以设备和应用测量为准。
+- `start` accepts `graphics="auto" | "virgl" | "software"`. The initial default is `auto`. The APK includes an isolated Android EGL/GLES VirGL service for ARM64 and x86_64. Each session has a private vtest socket and a separate renderer process for each connection. Use the vendor EGL probe to assess compatibility on Mali, Immortalis, Adreno, and x86 GPUs.
+- Dimensity 9400 and Immortalis use this EGL/GLES path. Keep the setup within the app's existing permissions and vendor drivers. Turnip is for Adreno. Leave restricted `/dev/dri` and `/dev/kgsl` nodes, kernel drivers, and SELinux settings alone.
+- The guest needs Mesa with VirGL and virpipe and `timeout`. On Debian and Ubuntu, check `libgl1-mesa-dri libegl1 libgles2 mesa-utils coreutils` and `libglx-mesa0` for the GLX compatibility check. Python 3 enables the bundled pixel probe. Use matching Mesa packages from the same distribution repositories.
+- After the Android GLES 3 probe, Lyra checks guest Mesa with `GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 VTEST_SOCKET_NAME=...`. It first draws and reads back a pixel in a surfaceless EGL pbuffer when Python 3 is available. Otherwise it tries `eglinfo -B -p surfaceless`. If headless validation is unavailable or fails, it checks `glxinfo -B` and uses a mapped `glxgears` window for the `X_GetImage BadMatch` case. `LIBGL_ALWAYS_SOFTWARE=1` selects the loader that routes OpenGL to virpipe.
+- `status.media.graphics=virgl` indicates successful guest validation. Check `graphics_probe` for the test that passed and `guest_graphics_log` for its renderer and output. Headless validation leaves X11 window presentation to be tested in the running session. `host_gpu` reports the Android renderer. `renderer_exit_code` records an independently observed renderer exit. Auto mode falls back to software if validation fails. Required VirGL reports `validation_failed` and offers a retry or software selection in the launch form. Use actual capabilities and avoid version or extension overrides such as `MESA_GL_VERSION_OVERRIDE`.
+- A `LYRA_VTEST_WORKER_EXIT` line identifies an individual renderer worker that stopped abnormally. The listener can still accept new connections. Relaunch the affected guest application to open a new connection. If `LYRA_VREND_FRAMEBUFFER` appears, capture the framebuffer status and surrounding command errors from the same log.
+- Applications launched inside a validated session inherit the graphics variables. Run `environment_exports` for extra commands. Check Mesa support separately in each environment. If its Mesa lacks virpipe, report the error and select software until a maintained VirGL/vtest-enabled build is available.
+- This path accelerates compatible Linux OpenGL calls independently of the display backend. Native X11 shares an AHardwareBuffer and the VNC fallback uses RFB encoding and decoding. Guest virpipe may still read back pixels. The FPS setting is a cap and actual performance depends on the device and workload.
+
+To run Chromium WebGL through VirGL, use the launcher inside a validated VirGL session. It selects ANGLE's system EGL backend and keeps Chromium's compositor on the CPU. Chromium 156 was verified on the RMX6688 with Mesa 25.0.7 and the Mali-G925 host renderer.
+
+```sh
+sh "$LYRA_CHROMIUM_WEBGL" --user-data-dir="$(mktemp -d)"
+```
+
+If `chrome://gpu` reports `gl=disabled`, inspect the command line shown by `chrome://version`. On Debian, `/usr/bin/chromium` sources configuration under `/etc/chromium.d/`. In the tested guest, `/etc/chromium.d/99-lyra-proot` added `--disable-gpu`. Remove that option from the guest configuration while preserving its other options. After restarting Chromium, check for `ANGLE_OPENGLES_EGL` and a WebGL renderer containing `virgl`. Keep the window size, session frame cap, and page fixed when comparing performance. Record 2D and WebGL results separately.
+
+When comparing the reported desktop GL version across APKs, run `eglinfo -B -p x11` in each session. Pair each profile version with its renderer line to distinguish VirGL from other Mesa drivers.
+
+On the tested Dimensity 9400 device, Parole displayed the full video in a VirGL session where mpv's EGL output showed only the top of the picture. To test the affected mpv path, compare the two commands with the same video and window geometry. The second refreshes Mesa's cached X11/EGL surface dimensions before each swap for that mpv process. It needs a guest C toolchain and EGL headers, such as `gcc libc6-dev libegl-dev` on Debian.
+
+```sh
+mpv --no-config --vo=gpu --gpu-api=opengl --gpu-context=x11egl -- ./video.mp4
+sh "$LYRA_MPV_EGL_REFRESH" --no-config --vo=gpu -- ./video.mp4
+```
+
+The RMX6688 rendered all 560 rows with `--vo=gpu`. An earlier session exposed desktop GL 2.1, which `gpu-next` rejected. To verify desktop OpenGL after updating VirGL, check the X11 profiles with `eglinfo -B -p x11`, then run `mpv --no-config --vo=gpu-next --gpu-api=opengl --gpu-context=x11egl --opengl-es=no -- ./video.mp4`. To test the GLES profile separately, use `--opengl-es=yes`.
+
+Check the initial frame, resized window, and fullscreen. SDL's OpenGL output is also available as a workaround in that session.
+
+```sh
+SDL_RENDER_DRIVER=opengl SDL_VIDEO_X11_FORCE_EGL=0 mpv --vo=sdl -- ./video.mp4
+```
+
+If SDL output is unavailable, `mpv --vo=x11 -- ./video.mp4` uses software output for that player. Run `mpv --vo=help` to list supported outputs.

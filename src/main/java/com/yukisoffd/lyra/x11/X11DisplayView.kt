@@ -1,6 +1,7 @@
 package com.yukisoffd.lyra.x11
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -32,6 +33,7 @@ import kotlin.math.roundToInt
 /** GPU-composited Android View. The Linux renderer remains a separate, guest-side concern. */
 class X11DisplayView(context: Context) : FrameLayout(context) {
     private val surfaceId = nextSurfaceId.incrementAndGet()
+    private val tracePointerEvents = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
     private var attachedDisplay: GuiDisplay? = null
     private var surfaceReady = false
     private val nativeSurface = SurfaceView(context).apply {
@@ -69,7 +71,10 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     override fun onInterceptTouchEvent(event: MotionEvent) = true
     override fun onAttachedToWindow() { super.onAttachedToWindow(); syncNativeSurface(); invalidate() }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh);updateDestination() }
-    companion object { private val nextSurfaceId = AtomicLong() }
+    companion object {
+        private val nextSurfaceId = AtomicLong()
+        private const val MOUSE_BUTTON_HISTORY_SIZE = 16
+    }
 
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val fallbackCursor = Path().apply {
@@ -80,13 +85,29 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     private var cursorBitmap: Bitmap? = null
     private var cursorImage: CursorImage? = null
     private val destination = RectF()
-    private val pressed = mutableMapOf<Long, Int>()
+    private data class PressedKey(val keysym: Int?, val scanCode: Int = 0) {
+        fun send(client: GuiInput, down: Boolean) {
+            if (scanCode != 0 && client is GuiDisplay) client.scanCode(scanCode, down)
+            else keysym?.let { client.key(it, down) }
+        }
+    }
+    private data class MouseButtonReport(
+        val deviceId: Int,
+        val eventTime: Long,
+        val buttons: Int,
+        val press: Boolean,
+        val generic: Boolean,
+    )
+
+    private val pressed = mutableMapOf<Long, PressedKey>()
+    private val mouseButtonHistory = ArrayDeque<MouseButtonReport>(MOUSE_BUTTON_HISTORY_SIZE)
     private var buttonMask = 0
     private var pointerX = 0
     private var pointerY = 0
     private var scrollY = 0f
     private var dragging = false
     private var multiTouch = false
+    private var touchInProgress = false
     private var pendingAccent = 0
     private var pendingKeyboard = false
     var session: GuiSession? = null
@@ -107,7 +128,7 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
         override fun onSingleTapUp(e: MotionEvent): Boolean { if (!multiTouch) performClick(); return true }
-        override fun onLongPress(e: MotionEvent) { if (!dragging && !multiTouch) click(4) }
+        override fun onLongPress(e: MotionEvent) { if (touchInProgress && !dragging && !multiTouch) click(4) }
         override fun onScroll(first: MotionEvent?, current: MotionEvent, dx: Float, dy: Float): Boolean {
             if (!multiTouch && current.pointerCount == 1) {
                 if (!dragging) { dragging = true; buttonMask = 1; sendPointer() }
@@ -191,13 +212,17 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     }
 
     private fun move(x: Float, y: Float) {
+        updatePointer(x, y)
+        sendPointer(true)
+    }
+
+    private fun updatePointer(x: Float, y: Float) {
         val target = session ?: return
         val bufferWidth = target.framebuffer?.width ?: target.options.width
         val bufferHeight = target.framebuffer?.height ?: target.options.height
         if (destination.width() <= 0) return
         pointerX = ((x - destination.left) * bufferWidth / destination.width()).roundToInt().coerceIn(0, bufferWidth - 1)
         pointerY = ((y - destination.top) * bufferHeight / destination.height()).roundToInt().coerceIn(0, bufferHeight - 1)
-        sendPointer(true)
         postInvalidateOnAnimation()
     }
 
@@ -206,23 +231,28 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
         session?.input?.pointer(pointerX, pointerY, buttonMask or mask)
         session?.input?.pointer(pointerX, pointerY, buttonMask)
     }
-    override fun performClick(): Boolean { click(1); super.performClick(); return true }
+    override fun performClick(): Boolean {
+        if (tracePointerEvents) session?.tracePointer("simulated left click")
+        click(1)
+        super.performClick()
+        return true
+    }
 
     // GestureDetector invokes performClick() for tap gestures.
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         requestFocus()
-        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
-            move(event.x, event.y)
-            buttonMask = mouseButtons(event.buttonState)
-            sendPointer()
-            if (event.actionMasked == MotionEvent.ACTION_CANCEL) releaseInput()
+        // A mouse tool can arrive through touch dispatch with a different source.
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE) || event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            handleMouse(event)
             return true
         }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchInProgress = true
+            tracePointer(event, "touch")
             multiTouch = false; dragging = false; scrollY = event.y
             move(event.x, event.y)
-        }
+        } else if (!touchInProgress) return true
         if (event.pointerCount > 1) {
             if (!multiTouch) { multiTouch = true; buttonMask = 0; sendPointer(); scrollY = event.y }
             if (event.actionMasked == MotionEvent.ACTION_MOVE) {
@@ -234,6 +264,8 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
         } else if (!multiTouch && event.actionMasked == MotionEvent.ACTION_MOVE) move(event.x, event.y)
         gestures.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            tracePointer(event, "touch")
+            touchInProgress = false
             buttonMask = 0; dragging = false; sendPointer()
         }
         return true
@@ -241,38 +273,105 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if (!event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) return super.onGenericMotionEvent(event)
-        move(event.x, event.y)
-        buttonMask = mouseButtons(event.buttonState)
-        when (event.actionMasked) {
-            MotionEvent.ACTION_SCROLL -> {
-                val vertical = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-                val horizontal = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-                repeat(abs(vertical).roundToInt().coerceIn(if (vertical == 0f) 0 else 1, 20)) { click(if (vertical > 0) 8 else 16) }
-                repeat(abs(horizontal).roundToInt().coerceIn(if (horizontal == 0f) 0 else 1, 20)) { click(if (horizontal > 0) 64 else 32) }
-            }
-            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> sendPointer()
-        }
+        handleMouse(event)
         return true
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    private fun handleMouse(event: MotionEvent) {
+        updatePointer(event.x, event.y)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_SCROLL -> {
+                val horizontal = wheelDelta(event.getAxisValue(MotionEvent.AXIS_HSCROLL))
+                val vertical = wheelDelta(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
+                if (horizontal != 0f || vertical != 0f) {
+                    session?.input?.scroll(pointerX, pointerY, buttonMask, horizontal, vertical)
+                }
+            }
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> forwardMouseButtons(event)
+            MotionEvent.ACTION_CANCEL -> {
+                tracePointer(event, "mouse")
+                releaseInput()
+            }
+            else -> sendPointer(true)
+        }
+    }
+
+    private fun forwardMouseButtons(event: MotionEvent) {
+        val buttons = mouseButtons(event.buttonState)
+        val action = event.actionMasked
+        val report = MouseButtonReport(
+            event.deviceId,
+            event.eventTime,
+            buttons,
+            press = action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_BUTTON_PRESS,
+            generic = action == MotionEvent.ACTION_BUTTON_PRESS || action == MotionEvent.ACTION_BUTTON_RELEASE,
+        )
+        // The touch copy can arrive after the generic release. Both copies keep the event time,
+        // even when Android assigns different down times to their gestures.
+        val duplicate = buttons != buttonMask && report.copy(generic = !report.generic) in mouseButtonHistory
+        if (tracePointerEvents) {
+            val route = if (duplicate) "mouse duplicate $buttonMask->$buttons" else "mouse $buttonMask->$buttons"
+            tracePointer(event, route)
+        }
+        if (buttons == buttonMask || duplicate) return
+        if (mouseButtonHistory.size == MOUSE_BUTTON_HISTORY_SIZE) mouseButtonHistory.removeFirst()
+        mouseButtonHistory.addLast(report)
+        buttonMask = buttons
+        sendPointer()
+    }
+
+    private fun tracePointer(event: MotionEvent, route: String) {
+        if (!tracePointerEvents) return
+        session?.tracePointer(
+            "$route ${MotionEvent.actionToString(event.actionMasked)} device=${event.deviceId} " +
+                "source=0x${event.source.toString(16)} tool=${event.getToolType(0)} " +
+                "buttons=${event.buttonState} action_button=${event.actionButton} " +
+                "down=${event.downTime} time=${event.eventTime}",
+        )
+    }
+
+    private fun wheelDelta(delta: Float): Float = if (delta.isFinite()) delta.coerceIn(-20f, 20f) else 0f
+
+    override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean =
+        (isHardwareKeyboard(event) && forwardKeyEvent(event)) || super.onKeyPreIme(keyCode, event)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        forwardKeyEvent(event) || super.dispatchKeyEvent(event)
+
+    private fun isHardwareKeyboard(event: KeyEvent): Boolean =
+        event.deviceId >= 0 && event.isFromSource(InputDevice.SOURCE_KEYBOARD) &&
+            event.flags and KeyEvent.FLAG_SOFT_KEYBOARD == 0
+
+    private fun forwardKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode in listOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN,
                 KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_HOME) ||
             (event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD)) {
-            return super.dispatchKeyEvent(event)
+            return false
         }
-        val client = session?.input ?: return super.dispatchKeyEvent(event)
+        val client = session?.input ?: return false
         if (event.action == KeyEvent.ACTION_MULTIPLE) {
             event.characters?.let(::sendText)
             return true
         }
         val physical = (event.deviceId.toLong() shl 32) or event.keyCode.toLong()
         if (event.action == KeyEvent.ACTION_UP) {
-            pressed.remove(physical)?.let { client.key(it, false) }
+            pressed.remove(physical)?.send(client, false)
             return true
         }
         if (event.action != KeyEvent.ACTION_DOWN) return true
+        pressed[physical]?.let { key ->
+            if (key.scanCode == 0) key.send(client, true)
+            return true
+        }
         var symbol = X11Input.special(event.keyCode)
+        // Android reports evdev scan codes. The X server applies its own XKB layout and repeat.
+        if (client is GuiDisplay && isHardwareKeyboard(event) && event.scanCode in 1..247) {
+            val key = PressedKey(symbol, event.scanCode)
+            pressed[physical] = key
+            key.send(client, true)
+            return true
+        }
         if (symbol == null) {
             val modifiers = event.metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK).inv()
             var code = event.getUnicodeChar(modifiers)
@@ -285,17 +384,17 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
                 if (combined != 0) code = combined else sendText(String(Character.toChars(pendingAccent)))
                 pendingAccent = 0
             }
-            if (code == 0) return super.dispatchKeyEvent(event)
+            if (code == 0) return false
             symbol = X11Input.unicode(code)
         }
-        pressed[physical] = symbol
+        pressed[physical] = PressedKey(symbol)
         client.key(symbol, true)
         return true
     }
 
     fun sendSpecial(keysym: Int) { session?.input?.key(keysym, true); session?.input?.key(keysym, false) }
     fun sendChord(modifier: Int, keysym: Int) {
-        val held = pressed.containsValue(modifier)
+        val held = pressed.values.any { it.keysym == modifier }
         if (!held) session?.input?.key(modifier, true)
         sendSpecial(keysym)
         if (!held) session?.input?.key(modifier, false)
@@ -306,7 +405,9 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
 
     fun releaseInput() {
         pendingKeyboard = false
-        pressed.values.forEach { session?.input?.key(it, false) }
+        touchInProgress = false
+        if (tracePointerEvents && buttonMask != 0) session?.tracePointer("release input mask=$buttonMask")
+        session?.input?.let { client -> pressed.values.forEach { it.send(client, false) } }
         pressed.clear(); buttonMask = 0; pendingAccent = 0
         sendPointer()
     }

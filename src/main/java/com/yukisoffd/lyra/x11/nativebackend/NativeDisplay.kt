@@ -34,18 +34,20 @@ class NativeDisplay private constructor(private val context: Context, private va
     private var owned = false
     private var controlOwned = false
     private val commands = ArrayBlockingQueue<() -> Unit>(4096)
-    @Volatile private var motion: Triple<Int, Int, Int>? = null
+    private val pointerQueue = PointerQueue<Unit>({ command -> enqueue { command(Unit) } }) { _, x, y, mask ->
+        lifetime.read { if (handle != 0L) nativePointer(handle, x, y, mask) }
+    }
     private var writer: Thread? = null
     private val main = Handler(Looper.getMainLooper())
     private val owners = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val clockRunning = AtomicBoolean(false)
-    @Volatile private var framePending = false
+    private val framePending = AtomicBoolean(false)
     private val pacer=FramePacer(options.framesPerSecond)
     private val frameClock = object : Choreographer.FrameCallback {
         override fun doFrame(time: Long) {
             if(closed.get() || owners.isEmpty()) { clockRunning.set(false); return }
-            if(pacer.frame(time)) {
-                framePending = true
+            if(pacer.frame(time) && framePending.compareAndSet(false, true)) {
+                commands.offer {} // Wake the writer on vsync, even at 120 Hz.
             }
             Choreographer.getInstance().postFrameCallback(this)
         }
@@ -106,10 +108,9 @@ class NativeDisplay private constructor(private val context: Context, private va
             try {
                 while (!closed.get()) {
                     commands.poll(if(owners.isEmpty()) 250 else 8, TimeUnit.MILLISECONDS)?.invoke()
-                    motion?.also { motion = null; sendPointer(it) }
                     val now = System.nanoTime()
-                    if(framePending || (owners.isEmpty() && now >= nextIdleTick)) {
-                        framePending = false; nextIdleTick = now + 500_000_000L
+                    if(framePending.getAndSet(false) || (owners.isEmpty() && now >= nextIdleTick)) {
+                        nextIdleTick = now + 500_000_000L
                         lifetime.read { if(handle != 0L) nativeFrame(handle) }
                     }
                 }
@@ -125,6 +126,7 @@ class NativeDisplay private constructor(private val context: Context, private va
         }
     }
     override fun key(keysym: Int, down: Boolean) = enqueue { lifetime.read { if(handle != 0L) nativeKey(handle, keysym, down) } }
+    override fun scanCode(code: Int, down: Boolean) = enqueue { lifetime.read { if (handle != 0L) nativeScanCode(handle, code, down) } }
     override fun text(text: String) {
         val points = text.codePoints().limit(4096).toArray()
         enqueue { lifetime.read { if(handle != 0L) for(point in points) {
@@ -133,10 +135,17 @@ class NativeDisplay private constructor(private val context: Context, private va
         } } }
     }
     override fun pointer(x: Int, y: Int, mask: Int, motionOnly: Boolean) {
-        val value = Triple(x.coerceIn(0, options.width-1), y.coerceIn(0, options.height-1), mask)
-        if(motionOnly) motion = value else { motion = null; enqueue { sendPointer(value) } }
+        pointerQueue.pointer(x.coerceIn(0, options.width - 1), y.coerceIn(0, options.height - 1), mask, motionOnly)
     }
-    private fun sendPointer(value: Triple<Int, Int, Int>) = lifetime.read { if(handle != 0L) nativePointer(handle,value.first,value.second,value.third) }
+    override fun scroll(x: Int, y: Int, mask: Int, horizontal: Float, vertical: Float) {
+        pointerQueue.ordered {
+            lifetime.read {
+                if (handle != 0L) {
+                    nativeScroll(handle, x.coerceIn(0, options.width - 1), y.coerceIn(0, options.height - 1), horizontal, vertical)
+                }
+            }
+        }
+    }
     override fun surface(id: Long, surface: Surface?) {
         lifetime.read { if(handle != 0L) nativeSurface(handle,id,surface) }
         if(surface == null) owners.remove(id) else owners.add(id)
@@ -190,7 +199,9 @@ class NativeDisplay private constructor(private val context: Context, private va
     private external fun nativeFrame(handle: Long)
     private external fun nativeSurface(handle: Long,id: Long,surface: Surface?)
     private external fun nativeKey(handle: Long,symbol: Int,down: Boolean)
+    private external fun nativeScanCode(handle: Long, code: Int, down: Boolean)
     private external fun nativePointer(handle: Long,x: Int,y: Int,mask: Int)
+    private external fun nativeScroll(handle: Long, x: Int, y: Int, horizontal: Float, vertical: Float)
     private external fun nativeStats(handle: Long): LongArray
     private external fun nativeCapture(handle: Long): IntArray?
 

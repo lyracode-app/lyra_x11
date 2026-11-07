@@ -1,5 +1,6 @@
 package com.yukisoffd.lyra.x11.rfb
 
+import com.yukisoffd.lyra.x11.PointerQueue
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -8,6 +9,7 @@ import java.io.IOException
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 /** Private Unix socket in production; legacy TCP is authenticated. UI never performs blocking IO. */
 class RfbClient(private val transport: RfbTransport, private val password: ByteArray = ByteArray(0),
@@ -15,10 +17,12 @@ class RfbClient(private val transport: RfbTransport, private val password: ByteA
     constructor(port: Int, password: ByteArray, frame: (PixelBuffer) -> Unit) : this(TcpRfbTransport(port), password, frame)
     private val closed = AtomicBoolean(false)
     private val commands = ArrayBlockingQueue<(DataOutputStream) -> Unit>(512)
+    private val pointerQueue = PointerQueue(::enqueue, ::writePointer)
     private var writer: Thread? = null
     @Volatile var buffer: PixelBuffer? = null; private set
     @Volatile var active = true
-    @Volatile private var pointer: Triple<Int, Int, Int>? = null
+    private var horizontalRemainder = 0f
+    private var verticalRemainder = 0f
 
     fun run() {
         transport.connect()
@@ -36,10 +40,6 @@ class RfbClient(private val transport: RfbTransport, private val password: ByteA
                     while (true) {
                         val queued = commands.poll() ?: break
                         queued(output)
-                    }
-                    // A single pending motion replaces older motions; button edges remain ordered in commands.
-                    synchronized(this) { pointer.also { pointer = null } }?.let { (x, y, mask) ->
-                        writePointer(output, x, y, mask)
                     }
                     output.flush()
                 }
@@ -168,11 +168,34 @@ class RfbClient(private val transport: RfbTransport, private val password: ByteA
 
     @Synchronized override fun pointer(x: Int, y: Int, mask: Int, motionOnly: Boolean) {
         val target = buffer ?: return
-        val px = x.coerceIn(0, target.width - 1); val py = y.coerceIn(0, target.height - 1)
-        if (motionOnly) pointer = Triple(px, py, mask)
-        else {
-            pointer = null
-            enqueue { writePointer(it, px, py, mask) }
+        pointerQueue.pointer(x.coerceIn(0, target.width - 1), y.coerceIn(0, target.height - 1), mask, motionOnly)
+    }
+
+    @Synchronized override fun scroll(x: Int, y: Int, mask: Int, horizontal: Float, vertical: Float) {
+        val target = buffer ?: return
+        horizontalRemainder += horizontal
+        verticalRemainder += vertical
+        val horizontalSteps = horizontalRemainder.toInt()
+        val verticalSteps = verticalRemainder.toInt()
+        horizontalRemainder -= horizontalSteps
+        verticalRemainder -= verticalSteps
+        val px = x.coerceIn(0, target.width - 1)
+        val py = y.coerceIn(0, target.height - 1)
+        if (horizontalSteps == 0 && verticalSteps == 0) {
+            pointerQueue.pointer(px, py, mask, motionOnly = true)
+            return
+        }
+        pointerQueue.ordered { out ->
+            val verticalMask = if (verticalSteps > 0) 8 else 16
+            val horizontalMask = if (horizontalSteps > 0) 64 else 32
+            repeat(abs(verticalSteps)) {
+                writePointer(out, px, py, mask or verticalMask)
+                writePointer(out, px, py, mask)
+            }
+            repeat(abs(horizontalSteps)) {
+                writePointer(out, px, py, mask or horizontalMask)
+                writePointer(out, px, py, mask)
+            }
         }
     }
 

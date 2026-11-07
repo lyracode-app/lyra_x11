@@ -13,6 +13,7 @@ enum class GuiStatus { STARTING, CONNECTED, ERROR, STOPPED }
 class GuiSession internal constructor(val id: String, val environment: GuiEnvironment,
     val display: Int, val options: GuiOptions) {
     @Volatile var status = GuiStatus.STARTING; internal set
+    @Volatile internal var virglValidationFailed = false
     @Volatile var client: RfbClient? = null; internal set
     @Volatile var nativeDisplay: GuiDisplay? = null; internal set
     @Volatile internal var displayFallback = ""
@@ -37,13 +38,21 @@ class GuiSession internal constructor(val id: String, val environment: GuiEnviro
     internal val closed = AtomicBoolean(false)
     internal val released = AtomicBoolean(false)
     private val log = StringBuilder()
+    private val recentPointerEvents = ArrayDeque<String>(24)
     @Synchronized internal fun append(text: String) {
         log.append(text)
         if (log.length > 16384) log.delete(0, log.length - 16384)
     }
+    @Synchronized internal fun tracePointer(message: String) {
+        if (recentPointerEvents.size == 24) recentPointerEvents.removeFirst()
+        recentPointerEvents.addLast("LYRA_INPUT: $message")
+    }
     fun environmentExports(): String = "export DISPLAY=:$display\nexport XAUTHORITY=${nativeDisplay?.authority ?: "/tmp/lyra-x11-$id/Xauthority"}" +
         (media.guest?.let { "\n${it.exports}" } ?: "")
-    @Synchronized fun logText(): String = "${environmentExports()}\n\n${displayDiagnostics()}\n\n${mediaDiagnostics()}\n\n$log"
+    @Synchronized fun logText(): String = buildString {
+        append("${environmentExports()}\n\n${displayDiagnostics()}\n\n${mediaDiagnostics()}\n\n$log")
+        recentPointerEvents.forEach { append('\n').append(it) }
+    }
     val title: String get() = "${environment.name} :$display"
 }
 
@@ -157,7 +166,11 @@ class GuiSessions(val runtime: GuiRuntime) : AutoCloseable {
             if (!session.closed.get()) error("Display connection closed")
         } catch (error: Exception) {
             if (!session.closed.get()) {
-                session.append("\n${error.message ?: error.javaClass.simpleName}\n")
+                session.virglValidationFailed = session.mediaDiagnostics()["graphics"] == "validation_failed"
+                val message = if (session.virglValidationFailed)
+                    "LYRA_GPU: Guest VirGL startup validation failed. Retry or select software rendering."
+                else error.message ?: error.javaClass.simpleName
+                session.append("\n$message\n")
                 session.status = GuiStatus.ERROR
             }
         } finally {

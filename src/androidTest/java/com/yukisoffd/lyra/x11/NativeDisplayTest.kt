@@ -7,6 +7,10 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
+import android.view.InputDevice
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.inputmethod.EditorInfo
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.view.SurfaceView
@@ -90,9 +94,111 @@ class NativeDisplayTest {
                 Thread.sleep(100)
                 val point=client.queryPointer()
                 assertEquals(200,point.first); assertEquals(150,point.second)
-                client.selectKeyboard()
+                client.selectInput()
                 instrumentation.runOnMainSync { guiView.sendSpecial('a'.code) }
-                assertEquals(listOf(2,3),client.keyEvents())
+                assertEquals(listOf(2,3),client.keyEvents().map { it.type })
+                instrumentation.runOnMainSync {
+                    assertTrue(guiView.requestFocus())
+                    fun hardware(action: Int, code: Int, scan: Int, repeat: Int = 0) {
+                        val event = KeyEvent(1L, 1L, action, code, repeat, 0, 7, scan, 0, InputDevice.SOURCE_KEYBOARD)
+                        assertTrue(guiView.dispatchKeyEventPreIme(event))
+                    }
+                    hardware(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, 29)
+                    // A different Android mapping must still send the physical A key to XKB.
+                    hardware(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Q, 30)
+                    hardware(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Q, 30, repeat = 1)
+                    hardware(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_Q, 30)
+                    guiView.releaseInput()
+                    hardware(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_1, 2)
+                    hardware(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_1, 2)
+                    hardware(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F1, 59)
+                    hardware(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_F1, 59)
+                    guiView.onCreateInputConnection(EditorInfo()).commitText("a", 1)
+                }
+                val keys = client.keyEvents(10)
+                assertEquals(listOf(2, 2, 3, 3, 2, 3, 2, 3, 2, 3), keys.map { it.type })
+                assertEquals(listOf(37, 38, 38, 37, 10, 10, 67, 67, 38, 38), keys.map { it.code })
+                assertEquals(4, keys[1].state and 4) // ControlMask is active on the A press.
+                client.selectRawButtons()
+                fun pointer(
+                    action: Int,
+                    buttons: Int = 0,
+                    vertical: Float = 0f,
+                    horizontal: Float = 0f,
+                    source: Int = InputDevice.SOURCE_MOUSE,
+                    tool: Int = MotionEvent.TOOL_TYPE_MOUSE,
+                    downTime: Long = 1L,
+                    eventTime: Long = 2L,
+                ) {
+                    val properties = MotionEvent.PointerProperties().apply {
+                        this.id = 0
+                        toolType = tool
+                    }
+                    val coords = MotionEvent.PointerCoords().apply {
+                        val scale = minOf(guiView.width / 800f, guiView.height / 600f)
+                        x = (guiView.width - 800f * scale) / 2f + 20f * scale
+                        y = (guiView.height - 600f * scale) / 2f + 580f * scale
+                        setAxisValue(MotionEvent.AXIS_VSCROLL, vertical)
+                        setAxisValue(MotionEvent.AXIS_HSCROLL, horizontal)
+                    }
+                    val event = MotionEvent.obtain(
+                        downTime, eventTime, action, 1, arrayOf(properties), arrayOf(coords), 0, buttons,
+                        1f, 1f, 0, 0, source, 0,
+                    )
+                    try {
+                        when (action) {
+                            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP ->
+                                assertTrue(guiView.onTouchEvent(event))
+                            else -> assertTrue(guiView.onGenericMotionEvent(event))
+                        }
+                    } finally {
+                        event.recycle()
+                    }
+                }
+                fun verifyButtons(message: String, buttonCodes: List<Int>, send: () -> Unit) {
+                    instrumentation.runOnMainSync {
+                        send()
+                        guiView.sendSpecial(0xffbe)
+                    }
+                    val expected = buttonCodes.flatMap { listOf(15 to it, 16 to it) }
+                    assertEquals(message, expected, client.rawButtonsBeforeKeyRelease())
+                }
+                verifyButtons("Quick click followed by delayed DOWN and UP copies", listOf(1)) {
+                    pointer(MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.BUTTON_PRIMARY, downTime = 100L, eventTime = 100L)
+                    pointer(MotionEvent.ACTION_BUTTON_RELEASE, downTime = 100L, eventTime = 156L)
+                    pointer(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, downTime = 99L, eventTime = 100L)
+                    pointer(MotionEvent.ACTION_UP, downTime = 99L, eventTime = 156L)
+                }
+                verifyButtons("Two quick clicks with distinct event times", listOf(1, 1)) {
+                    for (down in listOf(200L, 260L)) {
+                        pointer(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, downTime = down, eventTime = down)
+                        pointer(MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.BUTTON_PRIMARY, downTime = down, eventTime = down)
+                        pointer(MotionEvent.ACTION_BUTTON_RELEASE, downTime = down, eventTime = down + 55L)
+                        pointer(MotionEvent.ACTION_UP, downTime = down, eventTime = down + 55L)
+                    }
+                }
+                for ((index, source) in listOf(InputDevice.SOURCE_MOUSE, InputDevice.SOURCE_TOUCHSCREEN).withIndex()) {
+                    val down = 400L + index * 100L
+                    verifyButtons("Mouse click with touch event source $source", listOf(1)) {
+                        pointer(MotionEvent.ACTION_HOVER_MOVE)
+                        pointer(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, source = source, downTime = down, eventTime = down)
+                        pointer(MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.BUTTON_PRIMARY, downTime = down, eventTime = down)
+                        pointer(MotionEvent.ACTION_MOVE, MotionEvent.BUTTON_PRIMARY, source = source)
+                        pointer(MotionEvent.ACTION_BUTTON_RELEASE, downTime = down, eventTime = down + 56L)
+                        pointer(MotionEvent.ACTION_UP, source = source, downTime = down, eventTime = down + 56L)
+                    }
+                }
+                verifyButtons("Finger tap followed by an extra ACTION_UP", listOf(1)) {
+                    pointer(MotionEvent.ACTION_DOWN, source = InputDevice.SOURCE_TOUCHSCREEN, tool = MotionEvent.TOOL_TYPE_FINGER)
+                    pointer(MotionEvent.ACTION_UP, source = InputDevice.SOURCE_TOUCHSCREEN, tool = MotionEvent.TOOL_TYPE_FINGER)
+                    pointer(MotionEvent.ACTION_UP, source = InputDevice.SOURCE_TOUCHSCREEN, tool = MotionEvent.TOOL_TYPE_FINGER)
+                }
+                verifyButtons("Fractional, fast and horizontal wheel events", listOf(4, 5, 5, 7)) {
+                    pointer(MotionEvent.ACTION_HOVER_MOVE)
+                    repeat(4) { pointer(MotionEvent.ACTION_SCROLL, vertical = 0.25f) }
+                    pointer(MotionEvent.ACTION_SCROLL, vertical = -2f)
+                    pointer(MotionEvent.ACTION_SCROLL, horizontal = 1f)
+                }
                 instrumentation.runOnMainSync { guiView.session=null }
                 client.paint(0x002828dc)
                 until("Remaining surface must continue presenting") { (display.diagnostics()["surfaces"] as Long)==1L }
@@ -136,6 +242,7 @@ class NativeDisplayTest {
         var width=0;private set
         var height=0;private set
         private var root=0;private var base=0;private var gc=0
+        private var xiOpcode: Byte = 0
         private fun bytes(size: Int,block: ByteBuffer.()->Unit)=ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN).apply(block).array()
         private fun pad(n: Int)=(n+3)and -4
         init {
@@ -177,22 +284,66 @@ class NativeDisplayTest {
             val data=ByteArray(4);input.readFully(data)
             return ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).int and 0x00ffffff
         }
-        fun selectKeyboard() {
+        fun selectInput() {
             output.write(bytes(16) { put(2);put(0);putShort(4);putInt(root);putInt(1 shl 11);putInt(3) })
             output.write(bytes(12) { put(42);put(1);putShort(3);putInt(root);putInt(0) })
             output.write(bytes(4) { put(43);put(0);putShort(1) });output.flush()
             val reply=ByteArray(32);input.readFully(reply);check(reply[0].toInt()==1)
         }
-        fun keyEvents(): List<Int> {
-            val events=ArrayList<Int>()
-            repeat(8) {
+        fun selectRawButtons() {
+            val name = "XInputExtension".toByteArray()
+            val size = 8 + pad(name.size)
+            output.write(bytes(size) { put(98); put(0); putShort((size / 4).toShort()); putShort(name.size.toShort()); putShort(0); put(name) })
+            output.flush()
+            val reply = ByteArray(32)
+            input.readFully(reply)
+            check(reply[0].toInt() == 1 && reply[8].toInt() == 1) { "XInput extension missing" }
+            xiOpcode = reply[9]
+            output.write(bytes(8) { put(xiOpcode); put(47); putShort(2); putShort(2); putShort(1) })
+            output.flush()
+            input.readFully(reply)
+            check(reply[0].toInt() == 1) { "XIQueryVersion failed" }
+            // Same XI2 raw button selection on the root window as xinput test-xi2 --root.
+            output.write(bytes(20) {
+                put(xiOpcode); put(46); putShort(5); putInt(root); putShort(1); putShort(0)
+                putShort(1); putShort(1); putInt((1 shl 15) or (1 shl 16))
+            })
+            output.write(bytes(4) { put(43); put(0); putShort(1) })
+            output.flush()
+            input.readFully(reply)
+            check(reply[0].toInt() == 1) { "XISelectEvents failed" }
+        }
+        data class KeyboardEvent(val type: Int, val code: Int, val state: Int)
+        fun keyEvents(count: Int = 2): List<KeyboardEvent> {
+            val events = ArrayList<KeyboardEvent>()
+            repeat(count + 8) {
                 val reply=ByteArray(32);input.readFully(reply)
                 val type=reply[0].toInt()and 127
                 check(type!=0) { "X11 input error: ${reply.joinToString()}" }
-                if(type==2||type==3)events+=type
-                if(events.size==2)return events
+                if (type == 2 || type == 3) {
+                    val state = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN).getShort(28).toInt() and 0xffff
+                    events += KeyboardEvent(type, reply[1].toInt() and 255, state)
+                }
+                if (events.size == count) return events
             }
             error("Key events missing")
+        }
+        fun rawButtonsBeforeKeyRelease(): List<Pair<Int, Int>> {
+            val raw = mutableListOf<Pair<Int, Int>>()
+            repeat(48) {
+                val reply = ByteArray(32)
+                input.readFully(reply)
+                val type = reply[0].toInt() and 127
+                check(type != 0) { "X11 input error: ${reply.joinToString()}" }
+                if (type == 3) return raw
+                if (type == 35) {
+                    val data = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+                    input.readFully(ByteArray(data.getInt(4) * 4))
+                    val eventType = data.getShort(8).toInt()
+                    if (reply[1] == xiOpcode && eventType in 15..16) raw += eventType to data.getInt(16)
+                }
+            }
+            error("End of mouse input missing")
         }
         override fun close()=connection.close()
     }

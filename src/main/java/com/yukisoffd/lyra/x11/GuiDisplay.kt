@@ -8,6 +8,8 @@ interface GuiInput {
     fun key(keysym: Int, down: Boolean)
     fun text(text: String)
     fun pointer(x: Int, y: Int, mask: Int, motionOnly: Boolean = false)
+    /** Android wheel units, positive right and up. */
+    fun scroll(x: Int, y: Int, mask: Int, horizontal: Float, vertical: Float)
 }
 
 interface GuiDisplay : GuiInput, AutoCloseable {
@@ -15,6 +17,7 @@ interface GuiDisplay : GuiInput, AutoCloseable {
     val authority: String
     val isAlive: Boolean
     val hasFrame: Boolean
+    fun scanCode(code: Int, down: Boolean)
     fun surface(id: Long, surface: Surface?)
     fun capture(): Bitmap
     fun diagnostics(): Map<String, Any>

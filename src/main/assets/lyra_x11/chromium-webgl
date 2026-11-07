@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ "${GALLIUM_DRIVER:-}" != virpipe ] || [ ! -S "${VTEST_SOCKET_NAME:-}" ]; then
+    printf '%s\n' 'Start a Lyra VirGL session and load its environment before running this launcher.' >&2
+    exit 1
+fi
+
+exec chromium --ozone-platform=x11 --use-gl=angle --use-angle=gles-egl \
+    --disable-gpu-compositing "$@"

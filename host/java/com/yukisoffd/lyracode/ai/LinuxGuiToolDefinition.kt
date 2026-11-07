@@ -15,7 +15,9 @@ internal fun linuxGuiToolDefinition(): JSONObject {
         "app_command" to "Interactive GUI application command, e.g. cd /workspace/demo && python3 main.py. Lyra supplies Openbox and session D-Bus; install openbox first.",
     )
     descriptions.forEach { (name, description) -> properties.put(name, JSONObject().put("type", "string").put("description", description)) }
-    for (name in listOf("width", "height", "fps")) properties.put(name, JSONObject().put("type", "integer"))
+    for (name in listOf("width", "height")) properties.put(name, JSONObject().put("type", "integer"))
+    properties.put("fps", JSONObject().put("type", "integer").put("minimum", 5).put("maximum", 120)
+        .put("description", "Session frame-rate cap. Actual presentation also depends on the Android display and workload."))
     properties.put("audio", JSONObject().put("type", "string").put("enum", JSONArray(listOf("auto", "pulseaudio", "pipewire", "off")))
         .put("description", "Audio backend for start. Default reuses saved profile; auto prefers PulseAudio, then PipeWire. Follow guide for guest packages."))
     properties.put("graphics", JSONObject().put("type", "string").put("enum", JSONArray(listOf("auto", "virgl", "software")))

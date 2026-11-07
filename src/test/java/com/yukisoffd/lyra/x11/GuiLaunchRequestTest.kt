@@ -22,6 +22,13 @@ class GuiLaunchRequestTest {
         assertEquals(saved, request.options)
         assertEquals("overlay", request.mode)
     }
+    @Test fun highFrameRatesAreAcceptedThroughTheLaunchTool() {
+        val args = JSONObject().put("linux_id", "a")
+        for (rate in listOf(90, 120)) {
+            assertEquals(rate, GuiLaunchRequest.parse(args.put("fps", rate), GuiOptions()).options.framesPerSecond)
+        }
+        assertThrows(IllegalArgumentException::class.java) { GuiLaunchRequest.parse(args.put("fps", 121), GuiOptions()) }
+    }
     @Test fun previewsKeepTheExactApplicationCommandAndDoNotSelectADesktop() {
         val command = "cd /workspace/demo && python3 main.py --name 'hello world'"
         val request = GuiLaunchRequest.parse(JSONObject().put("linux_id", "debian").put("app_command", command), GuiOptions())

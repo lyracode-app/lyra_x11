@@ -159,6 +159,10 @@ object GuestMediaBootstrap {
               fi
               if [ "§{GALLIUM_DRIVER:-}" = virpipe ]; then
                 printf 'export GALLIUM_DRIVER=virpipe\nexport LIBGL_ALWAYS_SOFTWARE=1\nexport VTEST_SOCKET_NAME=%s\n' "§VTEST_SOCKET_NAME"
+                printf 'export LYRA_MPV_EGL_REFRESH=%s\nexport LYRA_CHROMIUM_WEBGL=%s\n' \
+                  "§media/mpv-egl-refresh" "§media/chromium-webgl"
+              else
+                echo 'unset LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL'
               fi
             } >"§media/environment.tmp"
             mv "§media/environment.tmp" "§media/environment"
@@ -166,23 +170,68 @@ object GuestMediaBootstrap {
     }
 
     private fun graphics(media: GuestMedia, options: GuiOptions): String = if (!media.virgl) {
-        "unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE\necho software >\"§media/graphics.status\""
+        "unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL\necho software >\"§media/graphics.status\""
     } else """
         export VTEST_SOCKET_NAME="§media/virgl"
         export GALLIUM_DRIVER=virpipe
         export LIBGL_ALWAYS_SOFTWARE=1
-        gpu_ok=no
-        if command -v glxinfo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
-          if timeout 8 glxinfo -B >"§media/graphics.log" 2>&1 && grep -i 'OpenGL renderer string:.*virgl' "§media/graphics.log" >/dev/null; then gpu_ok=yes; fi
-        else echo 'Install glxinfo (mesa-utils/mesa-demos) and timeout (coreutils) to validate Mesa virpipe.' >"§media/graphics.log"; fi
-        if [ "§gpu_ok" = yes ]; then
+        graphics_probe=failed
+        graphics_log="§media/graphics.log"
+        : >"§graphics_log"
+        if command -v timeout >/dev/null 2>&1; then
+          if command -v python3 >/dev/null 2>&1 && [ -r "§media/virgl-probe.py" ]; then
+            if LC_ALL=C DISPLAY= EGL_PLATFORM=surfaceless timeout -k 1 6 python3 -I "§media/virgl-probe.py" >>"§graphics_log" 2>&1; then
+              graphics_probe=pbuffer_pixels
+            else
+              echo "LYRA_GPU: Guest EGL pixel probe exited with status §?." >>"§graphics_log"
+            fi
+          elif command -v eglinfo >/dev/null 2>&1; then
+            if LC_ALL=C DISPLAY= EGL_PLATFORM=surfaceless timeout -k 1 6 eglinfo -B -p surfaceless >>"§graphics_log" 2>&1 &&
+               grep -Eiq '^OpenGL.* profile renderer:[[:space:]]*virgl([[:space:](]|§)' "§graphics_log"; then
+              graphics_probe=surfaceless_context
+            fi
+          fi
+          if [ "§graphics_probe" = failed ] && command -v glxinfo >/dev/null 2>&1; then
+            glx_log="§state/glxinfo.log"
+            glx_exit=0
+            LC_ALL=C timeout -k 1 8 glxinfo -B >"§glx_log" 2>&1 || glx_exit=§?
+            cat "§glx_log" >>"§graphics_log"
+            if [ "§glx_exit" -eq 0 ] &&
+               grep -Eiq '^OpenGL renderer string:[[:space:]]*virgl([[:space:](]|§)' "§glx_log"; then
+              graphics_probe=glx_context
+            elif grep -q 'BadMatch' "§glx_log" && grep -q '73 (X_GetImage)' "§glx_log" &&
+                 command -v glxgears >/dev/null 2>&1; then
+              echo 'LYRA_GPU: glxinfo hit X_GetImage BadMatch; checking a mapped GLX window.' >>"§graphics_log"
+              gears_log="§state/glxgears.log"
+              gears_exit=0
+              LC_ALL=C timeout -k 1 10 glxgears -info >"§gears_log" 2>&1 || gears_exit=§?
+              echo "glxgears exit status: §gears_exit" >>"§graphics_log"
+              grep -v '^GL_EXTENSIONS[[:space:]]*=' "§gears_log" >>"§graphics_log" || true
+              # GNU and BusyBox timeout can report different statuses for SIGTERM.
+              case "§gears_exit" in
+                0|124|143)
+                  if grep -Eiq '^GL_RENDERER[[:space:]]*=[[:space:]]*virgl([[:space:](]|§)' "§gears_log" &&
+                     grep -Eq '^[1-9][0-9]* frames in ' "§gears_log"; then graphics_probe=glx_window; fi ;;
+              esac
+            fi
+          fi
+        fi
+        printf '%s\n' "§graphics_probe" >"§media/graphics.probe"
+        if [ "§graphics_probe" != failed ]; then
           echo virgl >"§media/graphics.status"
+          export LYRA_MPV_EGL_REFRESH="§media/mpv-egl-refresh"
+          export LYRA_CHROMIUM_WEBGL="§media/chromium-webgl"
         else
+          echo 'LYRA_GPU: Check guest Mesa virpipe, timeout (coreutils), and Python 3 with EGL/GLES libraries or mesa-utils.' >>"§graphics_log"
+          cat "§graphics_log" >&2
+          if [ '${options.graphics.id}' = virgl ]; then
+            echo validation_failed >"§media/graphics.status"
+            echo 'LYRA_GPU: Explicit VirGL request failed validation. See the graphics log and the GUI guide.' >&2
+            exit 1
+          fi
           echo software >"§media/graphics.status"
-          echo 'LYRA_GPU: Mesa virpipe validation failed; using software. See media graphics.log and the GUI guide.' >&2
-          cat "§media/graphics.log" >&2
-          unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE
-          ${if (options.graphics == GraphicsBackend.VIRGL) "echo 'LYRA_GPU: Explicit VirGL request could not be satisfied.' >&2; exit 1" else ""}
+          echo 'LYRA_GPU: Mesa virpipe validation failed; using software. See the graphics log and the GUI guide.' >&2
+          unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL
         fi
     """.trimIndent()
 }

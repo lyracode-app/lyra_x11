@@ -43,7 +43,14 @@ class AndroidSessionMedia private constructor(private val context: Context, priv
             } catch (error: Exception) { log("LYRA_AUDIO: Android output unavailable: ${error.message}") }
         }
         if (options.graphics != GraphicsBackend.SOFTWARE) {
-            try { startRenderer() }
+            try {
+                for (asset in listOf("virgl-probe.py", "mpv-egl-refresh", "mpv-egl-refresh.c", "chromium-webgl")) {
+                    context.assets.open("lyra_x11/$asset").use { input ->
+                        File(directory, asset).outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                startRenderer()
+            }
             catch (error: Exception) {
                 gpuError = error.message ?: error.javaClass.simpleName
                 renderer?.destroy(); renderer = null
@@ -70,7 +77,7 @@ class AndroidSessionMedia private constructor(private val context: Context, priv
         } finally { if (process.isAlive) process.destroyForcibly() }
         val socket = File(directory, "virgl")
         require(socket.absolutePath.toByteArray().size < 104) { "VirGL socket path exceeds Unix socket limit" }
-        val server = ProcessBuilder(binary.absolutePath, "--no-fork", "--multi-clients", "--use-egl-surfaceless", "--use-gles",
+        val server = ProcessBuilder(binary.absolutePath, "--use-egl-surfaceless", "--use-gles",
             "--socket-path", socket.absolutePath).redirectErrorStream(true).apply {
             environment().remove("LD_PRELOAD")
         }.start()
@@ -93,27 +100,32 @@ class AndroidSessionMedia private constructor(private val context: Context, priv
     }
 
     override fun diagnostics(): Map<String, Any> = finalDiagnostics ?: snapshot()
-    private fun snapshot(): Map<String, Any> = mapOf(
-        "requested_audio" to options.audio.id, "audio_backend" to readStatus("audio.status", "starting"),
-        "audio_output" to (audio?.diagnostics() ?: mapOf("output" to if (options.audio == AudioBackend.OFF) "off" else "unavailable")),
-        "requested_graphics" to options.graphics.id, "host_graphics" to hostGpu,
-        "graphics" to if (gpuReady && renderer?.isAlive != true && !closed.get()) "renderer_exited"
-            else readStatus("graphics.status", if (gpuReady) "validating" else "software"),
-        "host_gpu" to probe, "renderer_alive" to (renderer?.isAlive == true), "gpu_error" to gpuError,
-        "guest_graphics_log" to readBounded(File(directory, "graphics.log")),
-        "guest_audio_log" to readBounded(File(directory, "audio.log")),
-    )
+    private fun rendererExitCode() = renderer?.let { runCatching(it::exitValue).getOrNull() }
+    private fun snapshot(exitCode: Int? = rendererExitCode()): Map<String, Any> {
+        val guestGraphics = readStatus("graphics.status", if (gpuReady) "validating" else "software")
+        return mapOf(
+            "requested_audio" to options.audio.id, "audio_backend" to readStatus("audio.status", "starting"),
+            "audio_output" to (audio?.diagnostics() ?: mapOf("output" to if (options.audio == AudioBackend.OFF) "off" else "unavailable")),
+            "requested_graphics" to options.graphics.id, "host_graphics" to hostGpu,
+            "graphics" to if (exitCode != null && guestGraphics != "validation_failed") "renderer_exited" else guestGraphics,
+            "graphics_probe" to readStatus("graphics.probe", if (gpuReady) "pending" else "skipped"),
+            "host_gpu" to probe, "renderer_alive" to (renderer?.isAlive == true), "gpu_error" to gpuError,
+            "guest_graphics_log" to readBounded(File(directory, "graphics.log")),
+            "guest_audio_log" to readBounded(File(directory, "audio.log")),
+        ) + if (exitCode != null) mapOf("renderer_exit_code" to exitCode) else emptyMap()
+    }
     private fun readStatus(name: String, fallback: String) = readBounded(File(directory, name)).trim().ifEmpty { fallback }
     override fun mute(muted: Boolean) { audio?.mute(muted) }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        val exitCode = rendererExitCode()
         audio?.close()
         renderer?.let { process ->
             process.destroy()
             runCatching { if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly() }
             runCatching { process.inputStream.close() }
         }
-        finalDiagnostics = snapshot() + mapOf("closed" to true, "renderer_alive" to false)
+        finalDiagnostics = snapshot(exitCode) + mapOf("closed" to true, "renderer_alive" to false)
         if (directoryOwned) runCatching {
             Files.walkFileTree(directory.toPath(), object : SimpleFileVisitor<Path>() {
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {

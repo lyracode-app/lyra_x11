@@ -73,8 +73,8 @@ Android 管理原生 X server，guest 脚本运行 `dbus-run-session`，不通�
 - 支持 RFB 3.3/3.7/3.8，协商 ZRLE、CopyRect、Raw，以及 DesktopSize、Cursor、LastRect 扩展。
 - 每连接复用 zlib 状态。ZRLE 以 16 KiB 缓冲流式解码，不分配整屏解压副本；纯色块批量填充，CopyRect 支持重叠区域。
 - 帧缓冲按脏矩形更新，Android View 使用硬件加速 Canvas 合成。帧内更新合并成一次界面重绘；不在主线程做网络读取和解压。
-- 每连接只保留一个增量更新请求。非当前会话最多约 2 次/秒请求更新；当前会话由 Xvnc 的 15/30/60 FPS 上限控制，实际帧率取决于设备及负载。
-- 指针移动合并，按键和按钮边沿按序传输。有界输入队列溢出时关闭连接，避免静默丢失释放事件。IME 长文本作为一批消息发送。
+- 每连接只保留一个增量更新请求。非当前会话最多约 2 次/秒请求更新，当前会话由 Xvnc 的会话帧率上限控制。15、30、60、90 和 120 FPS 档位适用于原生 X11 和 VNC，90／120 FPS 会向 Android 请求对应刷新率。实际帧率取决于屏幕及负载。
+- 指针移动合并，按键和按钮边沿按序传输。有界输入队列溢出时关闭连接，避免静默丢失释放事件。桌面有焦点时，实体键盘优先转发到 Linux。原生 X11 优先使用扫描码，键盘布局由 Linux 的 XKB 处理。屏幕键盘继续通过 Android 输入法提交文本。
 - 解码尺寸、矩形、压缩长度、解压量、游标和字符串长度均有上限。停止后释放会话帧缓冲，错误日志上限 16 KiB。
 
 RFB 需要 guest 像素编码、host 解码和位图上传，存在额外拷贝。它适合通用 2D 桌面兼容后端，不能保证视频、游戏、CAD 或 4K/60 FPS 性能。部分用户已反馈其设备运行 LXDE、1920×1080/30 FPS 无明显问题，可以参考。
@@ -87,11 +87,11 @@ RFB 需要 guest 像素编码、host 解码和位图上传，存在额外拷贝�
 
 工具栏、悬浮窗和 `linux_gui(action=audio, session_id=..., muted=...)` 可控制静音。`status.media` 返回所选后端、收到/写入/丢弃帧数、队列、underrun、音频焦点和错误。安装命令及诊断流程见 [工具规范](src/main/assets/lyra_x11/GUI_TOOL_SPEC.md)。
 
-### Linux GPU 加速 （这个不用看，残次品还用不了）
+### Linux GPU 加速
 
 现已打包 ARM64/x86_64 的 virglrenderer 1.3.0 + libepoxy 1.5.10 Android 服务，使用 Android vendor EGL/GLES，不依赖 Termux 安装、root 或直接 GPU 节点访问。源码归档、采用的 Termux Android 补丁、许可证、16 KB 对齐可执行文件和重建脚本全部位于本模块。详见 [native/README.md](native/README.md)。
 
-`graphics=auto` 先在独立进程探测 GLES 3 与实际 Android renderer，再通过 guest Mesa virpipe 和有超时的 `glxinfo -B` 验证。通过后才给桌面/应用导出 GPU 变量；失败保留软件显示与日志。`graphics=virgl` 强制要求验证成功，`software` 完全绕过原生服务。禁止通过虚报 GL 版本使检查通过。
+`graphics=auto` 先在独立进程探测 GLES 3 与实际 Android renderer，再通过 guest Mesa virpipe 和有超时的 `glxinfo -B` 验证。如果 `glxinfo` 遇到 `X_GetImage BadMatch`，改用有超时的 `glxgears -info`，要求它报告 VirGL 并完成一批绘制帧。通过后才给桌面/应用导出 GPU 变量；失败保留软件显示与日志。`graphics=virgl` 强制要求验证成功，`software` 完全绕过原生服务。禁止通过虚报 GL 版本使检查通过。
 
 Dimensity 9400/Immortalis 使用通用 EGL/GLES 路径；Adreno、Intel/AMD 等同样以实际 EGL 能力为准。Turnip 不是 Mali 驱动。原生 Android DDX 使用 AHardwareBuffer 共享显示表面，VNC 备用仍有 RFB 编解码开销；通用 guest DRM/DRI3 驱动、Vulkan 与视频硬解尚未提供。VirGL 加速兼容的 Linux OpenGL 工作，与显示后端分别报告。
 

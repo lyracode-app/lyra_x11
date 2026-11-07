@@ -65,32 +65,77 @@ class NativeMediaTest {
         } finally { probe.destroyForcibly(); probeLog.delete() }
         val socket = File(context.cacheDir, "vtest-test")
         val log = File(context.cacheDir, "vtest-test.log")
-        val server = ProcessBuilder(binary.absolutePath, "--no-fork", "--multi-clients", "--use-egl-surfaceless", "--use-gles",
+        val server = ProcessBuilder(binary.absolutePath, "--use-egl-surfaceless", "--use-gles",
             "--socket-path", socket.absolutePath).redirectErrorStream(true).redirectOutput(log).start()
         try {
             val deadline = System.nanoTime() + 5_000_000_000L
             while (!socket.exists() && server.isAlive && System.nanoTime() < deadline) Thread.sleep(20)
             assertTrue(log.readText(), server.isAlive && socket.exists())
-            repeat(2) { // A second Mesa client must work after the first closes.
-                LocalSocket().use { client ->
-                    client.connect(LocalSocketAddress(socket.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
-                    client.soTimeout = 5000
-                    fun words(vararg values: Int) = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
-                        .apply { values.forEach(::putInt) }.array()
-                    val name = "lyra-test\u0000".toByteArray()
-                    client.outputStream.write(words(name.size, 8))
-                    client.outputStream.write(name)
-                    client.outputStream.write(words(0, 1)) // VCMD_GET_CAPS
-                    client.outputStream.flush()
-                    val input = DataInputStream(client.inputStream)
-                    val length = Integer.reverseBytes(input.readInt())
-                    assertEquals(1, Integer.reverseBytes(input.readInt()))
-                    assertTrue("caps size=$length", length in 2..8192)
-                    val caps = ByteArray(length - 1); input.readFully(caps)
-                    assertTrue(caps.any { byte -> byte != 0.toByte() })
-                }
+            fun words(vararg values: Int) = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+                .apply { values.forEach(::putInt) }.array()
+            fun LocalSocket.begin() {
+                connect(LocalSocketAddress(socket.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
+                soTimeout = 5000
+                val name = "lyra-test\u0000".toByteArray()
+                outputStream.write(words(name.size, 8)) // VCMD_CREATE_RENDERER
+                outputStream.write(name)
+                outputStream.write(words(1, 11, 3)) // VCMD_PROTOCOL_VERSION
+                outputStream.flush()
+                val input = DataInputStream(inputStream)
+                assertEquals(1, Integer.reverseBytes(input.readInt()))
+                assertEquals(11, Integer.reverseBytes(input.readInt()))
+                assertEquals(3, Integer.reverseBytes(input.readInt()))
             }
-            android.util.Log.i("LyraMediaTest", "VTEST_CAPS_OK clients=2")
+            fun LocalSocket.checkCaps() {
+                outputStream.write(words(0, 1)) // VCMD_GET_CAPS
+                outputStream.flush()
+                val input = DataInputStream(inputStream)
+                val length = Integer.reverseBytes(input.readInt())
+                assertEquals(1, Integer.reverseBytes(input.readInt()))
+                assertTrue("caps size=$length", length in 2..8192)
+                val caps = ByteArray(length - 1)
+                input.readFully(caps)
+                assertTrue(caps.any { it != 0.toByte() })
+            }
+            fun workerPids() = Regex("LYRA_VTEST_WORKER_START pid=(\\d+)").findAll(log.readText())
+                .map { it.groupValues[1].toInt() }.toList()
+            LocalSocket().use { healthy ->
+                healthy.begin()
+                healthy.outputStream.write(words(1, 6, 0)) // VCMD_SUBMIT_CMD with VIRGL_CCMD_NOP
+                healthy.checkCaps()
+                LocalSocket().use { faulty ->
+                    faulty.begin()
+                    faulty.checkCaps()
+                    // A CLEAR header without the required payload fails in the decoder.
+                    faulty.outputStream.write(words(1, 6, 7))
+                    faulty.outputStream.flush()
+                    assertEquals(-1, faulty.inputStream.read())
+                    assertTrue(log.readText().contains("VTEST_CLIENT_ERROR_COMMAND_DISPATCH"))
+                }
+                val previousWorkers = workerPids()
+                LocalSocket().use { crashing ->
+                    crashing.begin()
+                    crashing.checkCaps()
+                    val pid = (workerPids() - previousWorkers.toSet()).single()
+                    Os.kill(pid, OsConstants.SIGKILL)
+                    assertEquals(-1, crashing.inputStream.read())
+                    val exit = "LYRA_VTEST_WORKER_EXIT pid=$pid signal=${OsConstants.SIGKILL}"
+                    val reaped = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+                    while (exit !in log.readText() && System.nanoTime() < reaped) Thread.sleep(20)
+                    assertTrue(log.readText(), exit in log.readText())
+                }
+                healthy.outputStream.write(words(1, 6, 0))
+                healthy.checkCaps()
+                assertTrue(server.isAlive)
+                LocalSocket().use { reconnect ->
+                    reconnect.begin()
+                    reconnect.checkCaps()
+                }
+                server.destroy()
+                assertTrue(server.waitFor(2, TimeUnit.SECONDS))
+                assertEquals(-1, healthy.inputStream.read())
+            }
+            android.util.Log.i("LyraMediaTest", "VTEST_CLIENT_ISOLATION_OK")
         } catch (error: Exception) { throw AssertionError(log.readText(), error) }
         finally { server.destroy(); if (!server.waitFor(2, TimeUnit.SECONDS)) server.destroyForcibly(); socket.delete(); log.delete() }
     }

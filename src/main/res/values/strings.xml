@@ -10,12 +10,17 @@
     <string name="x11_stop">Close session</string>
     <string name="x11_stop_all">Stop all desktops</string>
     <string name="x11_start">Start</string>
+    <string name="x11_environment">Linux environment</string>
+    <string name="x11_resolution">Resolution</string>
+    <string name="x11_frame_rate">Frame rate</string>
+    <string name="x11_fps_value">%1$d FPS</string>
     <string name="x11_desktop_command">Desktop or window manager command</string>
     <string name="x11_no_environment">Enable or import a PRoot Linux environment first.</string>
     <string name="x11_error">Unable to start desktop</string>
     <string name="x11_starting">Starting</string>
     <string name="x11_connected">Connected</string>
     <string name="x11_failed">Failed · see session log</string>
+    <string name="x11_virgl_retry">VirGL validation failed. Check the session log, retry, or select software rendering.</string>
     <string name="x11_stopped">Stopped</string>
     <string name="x11_notification">Local Linux desktops are running. Tap to return.</string>
     <string name="x11_intro">Choose a desktop preset or enter a command. For first-time setup, ask the AI to follow the Linux GUI tool guide and install the required packages.</string>

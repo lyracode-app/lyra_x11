@@ -6,6 +6,12 @@ def edit(path, old, new, count=-1):
     path.write_text(text.replace(old,new,count),encoding='utf-8',newline='\n')
 
 def adapt(source):
+    # The event loop reuses its mask. Motion must not carry over a previous wheel axis.
+    core=source/'lyra/server_core.inc'
+    motion='                    case 0: // BUTTON_UNDEFINED\n'
+    reset=motion+'                        valuator_mask_zero(&mask);\n'
+    if reset not in core.read_text(encoding='utf-8'):
+        edit(core, motion, reset, count=1)
     header=source/'lorie/lorie.h'; renderer=source/'lorie/renderer.cpp'
     if 'lyraSurfaceState' in header.read_text(): return
     edit(header,'struct Renderer {','struct Renderer {\n    void *lyraSurfaceState = nullptr;')

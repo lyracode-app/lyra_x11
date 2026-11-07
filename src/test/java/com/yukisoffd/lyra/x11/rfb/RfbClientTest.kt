@@ -117,6 +117,25 @@ class RfbClientTest {
                         input.readUnsignedShort(); assertEquals(expected, input.readInt())
                     }
                 }
+                val wheelMasks = mutableListOf<Int>()
+                while (true) {
+                    val type = input.readUnsignedByte()
+                    if (type == 4) break
+                    assertEquals(5, type)
+                    val mask = input.readUnsignedByte()
+                    assertEquals(0, input.readUnsignedShort())
+                    assertEquals(1, input.readUnsignedShort())
+                    if (mask == 1) continue
+                    wheelMasks += mask
+                    assertEquals(5, input.readUnsignedByte())
+                    assertEquals(1, input.readUnsignedByte())
+                    assertEquals(0, input.readUnsignedShort())
+                    assertEquals(1, input.readUnsignedShort())
+                }
+                assertEquals(listOf(9, 9, 9, 65), wheelMasks)
+                assertEquals(1, input.readUnsignedByte())
+                input.readUnsignedShort()
+                assertEquals(0xffbe, input.readInt())
             }
         }
         val readerTask = executor.submit { runCatching { client.run() } }
@@ -124,6 +143,9 @@ class RfbClientTest {
             assertTrue(ready.await(5, TimeUnit.SECONDS))
             client.key(0xffe3, true); client.key(0xffe3, false); client.pointer(99, 99, 1)
             client.text("中😀\n" + "a".repeat(1000))
+            repeat(3) { client.scroll(0, 1, 1, horizontal = 0f, vertical = 0.25f) }
+            client.scroll(0, 1, 1, horizontal = 1f, vertical = 2.25f)
+            client.key(0xffbe, true)
             inputSent.countDown()
             serverTask.get(5, TimeUnit.SECONDS)
         } finally {
