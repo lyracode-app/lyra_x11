@@ -17,6 +17,9 @@ interface GuiDisplay : GuiInput, AutoCloseable {
     val authority: String
     val isAlive: Boolean
     val hasFrame: Boolean
+    val pointerLocked: Boolean
+    fun relativePointer(dx: Float, dy: Float, mask: Int)
+    fun relativeScroll(horizontal: Float, vertical: Float)
     fun scanCode(code: Int, down: Boolean)
     fun surface(id: Long, surface: Surface?)
     fun capture(): Bitmap

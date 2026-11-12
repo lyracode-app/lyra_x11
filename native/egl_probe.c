@@ -1,6 +1,6 @@
 /* Lyra: isolated EGL capability probe. Runs in the renderer process, never HWUI. */
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
+#include <epoxy/gl.h>
+#include <epoxy/egl.h>
 #include <stdio.h>
 #include <string.h>
 #include <dlfcn.h>
@@ -65,7 +65,11 @@ int lyra_egl_probe(void) {
     printf("{\"renderer\":"); json_string(renderer);
     printf(",\"vendor\":"); json_string(vendor);
     printf(",\"version\":"); json_string(version);
-    printf("}\n");
+    bool desktop_gl_features = epoxy_gl_version() >= 32 &&
+        epoxy_has_gl_extension("GL_EXT_depth_clamp") &&
+        epoxy_has_gl_extension("GL_EXT_blend_func_extended") &&
+        epoxy_has_gl_extension("GL_EXT_disjoint_timer_query");
+    printf(",\"desktop_gl_features\":%s}\n", desktop_gl_features ? "true" : "false");
     result = 0;
 done:
     if (result) fprintf(stderr, "LYRA_EGL_PROBE_FAILED error=0x%x\n", eglGetError());

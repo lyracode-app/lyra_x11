@@ -14,7 +14,11 @@ class GuiLaunchRequestTest {
         assertEquals(DisplayBackend.NATIVE,explicit.displayBackend)
         assertEquals(DisplayBackend.VNC,GuiLaunchRequest.parse(args.put("display_backend","vnc"),saved).options.displayBackend)
         assertThrows(IllegalStateException::class.java) { GuiLaunchRequest.parse(args.put("display_backend","remote"),saved) }
-        assertThrows(IllegalStateException::class.java) { GuiLaunchRequest.parse(args.put("graphics", "turnip"), saved) }
+        args.remove("display_backend")
+        for (backend in listOf(GraphicsBackend.TURNIP, GraphicsBackend.VENUS)) {
+            assertEquals(backend, GuiLaunchRequest.parse(args.put("graphics", backend.id), saved).options.graphics)
+        }
+        assertThrows(IllegalStateException::class.java) { GuiLaunchRequest.parse(args.put("graphics", "unknown"), saved) }
     }
     @Test fun omittedCommandAndGeometryReuseTheEnvironmentProfile() {
         val saved = GuiOptions(1920, 1080, 30, "startlxde")

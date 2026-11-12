@@ -26,7 +26,7 @@ data class GuiLaunchRequest(val environmentId: String, val mode: String, val opt
                 displayBackend = DisplayBackend.entries.firstOrNull { it.id == args.optString("display_backend", saved.displayBackend.id) }
                     ?: error("display_backend must be auto, native or vnc"),
                 graphics = GraphicsBackend.entries.firstOrNull { it.id == args.optString("graphics", saved.graphics.id) }
-                    ?: error("graphics must be auto, virgl or software")))
+                    ?: error("graphics must be ${GraphicsBackend.entries.joinToString { it.id }}")))
         }
     }
 }

@@ -157,21 +157,63 @@ object GuestMediaBootstrap {
                 printf 'export PIPEWIRE_RUNTIME_DIR=%s\nexport PIPEWIRE_REMOTE=lyra\nexport PIPEWIRE_LATENCY=1024/48000\n' "§media"
                 printf 'export ALSA_CONFIG_PATH=%s\n' "§ALSA_CONFIG_PATH"
               fi
-              if [ "§{GALLIUM_DRIVER:-}" = virpipe ]; then
-                printf 'export GALLIUM_DRIVER=virpipe\nexport LIBGL_ALWAYS_SOFTWARE=1\nexport VTEST_SOCKET_NAME=%s\n' "§VTEST_SOCKET_NAME"
-                printf 'export LYRA_MPV_EGL_REFRESH=%s\nexport LYRA_CHROMIUM_WEBGL=%s\n' \
-                  "§media/mpv-egl-refresh" "§media/chromium-webgl"
-              else
-                echo 'unset LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL'
-              fi
+              cat "§state/graphics.env"
             } >"§media/environment.tmp"
             mv "§media/environment.tmp" "§media/environment"
         """.trimIndent().replace('§', '$')
     }
 
-    private fun graphics(media: GuestMedia, options: GuiOptions): String = if (!media.virgl) {
-        "unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL\necho software >\"§media/graphics.status\""
-    } else """
+    private fun graphics(media: GuestMedia, options: GuiOptions): String = """
+        {
+          echo 'unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL'
+          echo 'if [ -n "§{LYRA_VULKAN_BACKEND:-}" ]; then'
+          echo '  unset LYRA_VULKAN_BACKEND VK_DRIVER_FILES VK_ICD_FILENAMES VN_DEBUG VN_PERF MESA_VK_WSI_DEBUG LIBGL_KOPPER_DRI2 MESA_LOADER_DRIVER_OVERRIDE'
+          echo 'fi'
+        } >"§state/graphics.env"
+        . "§state/graphics.env"
+        ${if (options.graphics.requiresVulkan) applyVulkanProbe(media, options) else virglGraphics(media, options)}
+    """.trimIndent()
+
+    private fun applyVulkanProbe(media: GuestMedia, options: GuiOptions): String = """
+        echo 'unset LIBGL_KOPPER_DRI2 MESA_LOADER_DRIVER_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_GLSL_VERSION_OVERRIDE MESA_GLES_VERSION_OVERRIDE' >>"§state/graphics.env"
+        . "§state/graphics.env"
+        : >"§media/vulkan.request"
+        attempts=0
+        until [ -f "§media/vulkan.supervisor" ] || [ "§attempts" -ge 1000 ]; do
+          sleep 0.1
+          attempts=§((attempts + 1))
+        done
+        zink_ready=no
+        if [ -f "§media/vulkan.supervisor" ] && [ -s "§media/vulkan.env" ]; then
+          echo ${options.graphics.id} >"§media/vulkan.status"
+          cat "§media/vulkan.env" >>"§state/graphics.env"
+          if [ "§(cat "§media/vulkan.supervisor")" = exit_0 ] && [ -s "§media/zink.env" ]; then
+            zink_ready=yes
+            echo zink >"§media/graphics.status"
+            cp "§media/zink.log" "§media/graphics.log"
+            cp "§media/zink.probe" "§media/graphics.probe"
+            cat "§media/zink.env" >>"§state/graphics.env"
+          fi
+        else
+          echo validation_failed >"§media/vulkan.status"
+        fi
+        if [ "§zink_ready" = no ]; then
+          echo 'LYRA_GPU: Vulkan or Zink validation failed. Trying the OpenGL compatibility path.' >&2
+          ${virglGraphics(media, options).prependIndent("          ")}
+        fi
+        . "§state/graphics.env"
+    """.trimIndent()
+
+    private fun virglGraphics(media: GuestMedia, options: GuiOptions): String {
+        if (!media.virgl || options.graphics == GraphicsBackend.SOFTWARE) {
+            return "unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL\necho software >\"§media/graphics.status\""
+        }
+        val angle = options.graphics == GraphicsBackend.VIRGL_ANGLE
+        val unsetOverrides = if (angle) "env -u MESA_GL_VERSION_OVERRIDE -u MESA_GLSL_VERSION_OVERRIDE -u MESA_EXTENSION_OVERRIDE " else ""
+        val probeArgument = if (angle) " --virgl-angle" else ""
+        val probeHelp = if (angle) "Check guest Mesa virpipe, Python 3, libEGL and libGL." else
+            "Check guest Mesa virpipe, timeout (coreutils), and Python 3 with EGL/GLES libraries or mesa-utils."
+        return """
         export VTEST_SOCKET_NAME="§media/virgl"
         export GALLIUM_DRIVER=virpipe
         export LIBGL_ALWAYS_SOFTWARE=1
@@ -180,18 +222,18 @@ object GuestMediaBootstrap {
         : >"§graphics_log"
         if command -v timeout >/dev/null 2>&1; then
           if command -v python3 >/dev/null 2>&1 && [ -r "§media/virgl-probe.py" ]; then
-            if LC_ALL=C DISPLAY= EGL_PLATFORM=surfaceless timeout -k 1 6 python3 -I "§media/virgl-probe.py" >>"§graphics_log" 2>&1; then
-              graphics_probe=pbuffer_pixels
+            if LC_ALL=C DISPLAY= EGL_PLATFORM=surfaceless timeout -k 1 6 ${unsetOverrides}python3 -I "§media/virgl-probe.py"$probeArgument >>"§graphics_log" 2>&1; then
+              graphics_probe=${if (angle) "pbuffer_gl33" else "pbuffer_pixels"}
             else
               echo "LYRA_GPU: Guest EGL pixel probe exited with status §?." >>"§graphics_log"
             fi
-          elif command -v eglinfo >/dev/null 2>&1; then
+          elif [ '$angle' = false ] && command -v eglinfo >/dev/null 2>&1; then
             if LC_ALL=C DISPLAY= EGL_PLATFORM=surfaceless timeout -k 1 6 eglinfo -B -p surfaceless >>"§graphics_log" 2>&1 &&
                grep -Eiq '^OpenGL.* profile renderer:[[:space:]]*virgl([[:space:](]|§)' "§graphics_log"; then
               graphics_probe=surfaceless_context
             fi
           fi
-          if [ "§graphics_probe" = failed ] && command -v glxinfo >/dev/null 2>&1; then
+          if [ '$angle' = false ] && [ "§graphics_probe" = failed ] && command -v glxinfo >/dev/null 2>&1; then
             glx_log="§state/glxinfo.log"
             glx_exit=0
             LC_ALL=C timeout -k 1 8 glxinfo -B >"§glx_log" 2>&1 || glx_exit=§?
@@ -221,10 +263,14 @@ object GuestMediaBootstrap {
           echo virgl >"§media/graphics.status"
           export LYRA_MPV_EGL_REFRESH="§media/mpv-egl-refresh"
           export LYRA_CHROMIUM_WEBGL="§media/chromium-webgl"
+          {
+            printf 'export GALLIUM_DRIVER=virpipe\nexport LIBGL_ALWAYS_SOFTWARE=1\nexport VTEST_SOCKET_NAME=%s\n' "§VTEST_SOCKET_NAME"
+            printf 'export LYRA_MPV_EGL_REFRESH=%s\nexport LYRA_CHROMIUM_WEBGL=%s\n' "§LYRA_MPV_EGL_REFRESH" "§LYRA_CHROMIUM_WEBGL"
+          } >>"§state/graphics.env"
         else
-          echo 'LYRA_GPU: Check guest Mesa virpipe, timeout (coreutils), and Python 3 with EGL/GLES libraries or mesa-utils.' >>"§graphics_log"
+          echo 'LYRA_GPU: $probeHelp' >>"§graphics_log"
           cat "§graphics_log" >&2
-          if [ '${options.graphics.id}' = virgl ]; then
+          if [ '${options.graphics.requiresVirgl}' = true ]; then
             echo validation_failed >"§media/graphics.status"
             echo 'LYRA_GPU: Explicit VirGL request failed validation. See the graphics log and the GUI guide.' >&2
             exit 1
@@ -233,5 +279,6 @@ object GuestMediaBootstrap {
           echo 'LYRA_GPU: Mesa virpipe validation failed; using software. See the graphics log and the GUI guide.' >&2
           unset GALLIUM_DRIVER VTEST_SOCKET_NAME LIBGL_ALWAYS_SOFTWARE LYRA_MPV_EGL_REFRESH LYRA_CHROMIUM_WEBGL
         fi
-    """.trimIndent()
+        """.trimIndent()
+    }
 }

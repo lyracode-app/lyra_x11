@@ -129,6 +129,9 @@ class NativeDisplayTest {
                     tool: Int = MotionEvent.TOOL_TYPE_MOUSE,
                     downTime: Long = 1L,
                     eventTime: Long = 2L,
+                    desktopX: Float = 20f,
+                    desktopY: Float = 580f,
+                    relativeBatch: Pair<Float, Float>? = null,
                 ) {
                     val properties = MotionEvent.PointerProperties().apply {
                         this.id = 0
@@ -136,8 +139,8 @@ class NativeDisplayTest {
                     }
                     val coords = MotionEvent.PointerCoords().apply {
                         val scale = minOf(guiView.width / 800f, guiView.height / 600f)
-                        x = (guiView.width - 800f * scale) / 2f + 20f * scale
-                        y = (guiView.height - 600f * scale) / 2f + 580f * scale
+                        x = if (source == InputDevice.SOURCE_MOUSE_RELATIVE) desktopX else (guiView.width - 800f * scale) / 2f + desktopX * scale
+                        y = if (source == InputDevice.SOURCE_MOUSE_RELATIVE) desktopY else (guiView.height - 600f * scale) / 2f + desktopY * scale
                         setAxisValue(MotionEvent.AXIS_VSCROLL, vertical)
                         setAxisValue(MotionEvent.AXIS_HSCROLL, horizontal)
                     }
@@ -146,7 +149,9 @@ class NativeDisplayTest {
                         1f, 1f, 0, 0, source, 0,
                     )
                     try {
-                        when (action) {
+                        relativeBatch?.let { (dx, dy) -> event.addBatch(eventTime + 1, dx, dy, 0f, 0f, 0) }
+                        if (source == InputDevice.SOURCE_MOUSE_RELATIVE) assertTrue(guiView.dispatchCapturedPointerEvent(event))
+                        else when (action) {
                             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP ->
                                 assertTrue(guiView.onTouchEvent(event))
                             else -> assertTrue(guiView.onGenericMotionEvent(event))
@@ -199,6 +204,90 @@ class NativeDisplayTest {
                     pointer(MotionEvent.ACTION_SCROLL, vertical = -2f)
                     pointer(MotionEvent.ACTION_SCROLL, horizontal = 1f)
                 }
+
+                client.selectRawButtons(includeMotion = true)
+                client.grabPointer(hidden = false)
+                assertFalse("A visible grab is not pointer lock", display.pointerLocked)
+                client.ungrabPointer()
+                client.grabPointer(hidden = true)
+                until("A hidden, explicit grab must enter pointer lock") { display.pointerLocked }
+                fun hasMouseCapture(): Boolean {
+                    var captured = false
+                    instrumentation.runOnMainSync { captured = guiView.hasPointerCapture() }
+                    return captured
+                }
+                until("X11 pointer lock must request Android mouse capture") { hasMouseCapture() }
+                client.warpPointer(400, 300)
+                instrumentation.runOnMainSync {
+                    pointer(MotionEvent.ACTION_MOVE, source = InputDevice.SOURCE_MOUSE_RELATIVE,
+                        desktopX = 15f, desktopY = -7f, relativeBatch = 25f to 3f)
+                    guiView.sendSpecial(0xffbe)
+                }
+                client.rawPointerBeforeKeyRelease().let { (buttons, motion) ->
+                    assertTrue(buttons.isEmpty())
+                    assertEquals(listOf(40.0 to -4.0), motion)
+                }
+                client.warpPointer(400, 300)
+                verifyButtons("Captured buttons and fractional wheel remain relative", listOf(1, 4)) {
+                    pointer(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, source = InputDevice.SOURCE_MOUSE_RELATIVE,
+                        downTime = 700L, eventTime = 700L, desktopX = 0f, desktopY = 0f)
+                    pointer(MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.BUTTON_PRIMARY, source = InputDevice.SOURCE_MOUSE_RELATIVE,
+                        downTime = 700L, eventTime = 700L)
+                    pointer(MotionEvent.ACTION_BUTTON_RELEASE, source = InputDevice.SOURCE_MOUSE_RELATIVE,
+                        downTime = 700L, eventTime = 750L)
+                    pointer(MotionEvent.ACTION_UP, source = InputDevice.SOURCE_MOUSE_RELATIVE,
+                        downTime = 700L, eventTime = 750L, desktopX = 0f, desktopY = 0f)
+                    repeat(4) { pointer(MotionEvent.ACTION_SCROLL, vertical = 0.25f, source = InputDevice.SOURCE_MOUSE_RELATIVE) }
+                }
+                assertEquals(400 to 300, client.queryPointer())
+                client.warpPointer(400, 300)
+                fun finger(action: Int, x: Float, y: Float, time: Long) = pointer(
+                    action, source = InputDevice.SOURCE_TOUCHSCREEN, tool = MotionEvent.TOOL_TYPE_FINGER,
+                    downTime = 1000, eventTime = time, desktopX = x, desktopY = y,
+                )
+                instrumentation.runOnMainSync {
+                    finger(MotionEvent.ACTION_DOWN, 500f, 430f, 1000)
+                    finger(MotionEvent.ACTION_MOVE, 560f, 410f, 1016)
+                    guiView.sendSpecial(0xffbe)
+                }
+                client.rawPointerBeforeKeyRelease().let { (buttons, motion) ->
+                    assertTrue("Looking around must not press the left button", buttons.isEmpty())
+                    assertEquals(1, motion.size)
+                    assertEquals(60.0, motion.single().first, 0.01)
+                    assertEquals(-20.0, motion.single().second, 0.01)
+                }
+                client.warpPointer(400, 300)
+                instrumentation.runOnMainSync {
+                    finger(MotionEvent.ACTION_MOVE, 600f, 425f, 1032)
+                    finger(MotionEvent.ACTION_UP, 600f, 425f, 1048)
+                    guiView.sendSpecial(0xffbe)
+                }
+                client.rawPointerBeforeKeyRelease().let { (buttons, motion) ->
+                    assertTrue(buttons.isEmpty())
+                    assertEquals(1, motion.size)
+                    assertEquals(40.0, motion.single().first, 0.01)
+                    assertEquals(15.0, motion.single().second, 0.01)
+                }
+                client.warpPointer(400, 300)
+                instrumentation.runOnMainSync {
+                    finger(MotionEvent.ACTION_DOWN, 500f, 430f, 1200)
+                    finger(MotionEvent.ACTION_MOVE, 501f, 430f, 1216)
+                    finger(MotionEvent.ACTION_UP, 501f, 430f, 1232)
+                    guiView.sendSpecial(0xffbe)
+                }
+                client.rawPointerBeforeKeyRelease().let { (buttons, motion) ->
+                    assertEquals("A tap under pointer lock should still click", listOf(15 to 1, 16 to 1), buttons)
+                    assertTrue("A tap must not move the locked pointer", motion.isEmpty())
+                }
+                assertEquals(400 to 300, client.queryPointer())
+                client.ungrabPointer()
+                until("Ungrab must restore absolute touch") { !display.pointerLocked }
+                until("Ungrab must release Android mouse capture") { !hasMouseCapture() }
+                verifyButtons("Touch tap after unlocking", listOf(1)) {
+                    finger(MotionEvent.ACTION_DOWN, 100f, 120f, 2000)
+                    finger(MotionEvent.ACTION_UP, 100f, 120f, 2016)
+                }
+                assertEquals(100 to 120, client.queryPointer())
                 instrumentation.runOnMainSync { guiView.session=null }
                 client.paint(0x002828dc)
                 until("Remaining surface must continue presenting") { (display.diagnostics()["surfaces"] as Long)==1L }
@@ -277,6 +366,46 @@ class NativeDisplayTest {
             val data=ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
             return data.getShort(16).toInt() to data.getShort(18).toInt()
         }
+        fun warpPointer(x: Int, y: Int) {
+            output.write(bytes(24) {
+                put(41); put(0); putShort(6); putInt(0); putInt(root)
+                putLong(0); putShort(x.toShort()); putShort(y.toShort())
+            })
+            assertEquals(x to y, queryPointer())
+        }
+        fun grabPointer(hidden: Boolean) {
+            // Like GLFW, grab a child window and select XI2 RawMotion on the root.
+            val window = base or 5
+            output.write(bytes(32) {
+                put(1); put(0); putShort(8); putInt(window); putInt(root); putInt(0)
+                putShort(width.toShort()); putShort(height.toShort()); putShort(0); putShort(1); putInt(0); putInt(0)
+            })
+            output.write(bytes(8) { put(8); put(0); putShort(2); putInt(window) })
+            val cursor = if (hidden) {
+                val pixmap = base or 2
+                val bitmapGc = base or 3
+                val cursor = base or 4
+                output.write(bytes(16) { put(53); put(1); putShort(4); putInt(pixmap); putInt(root); putShort(1); putShort(1) })
+                output.write(bytes(20) { put(55); put(0); putShort(5); putInt(bitmapGc); putInt(pixmap); putInt(4); putInt(0) })
+                output.write(bytes(20) { put(70); put(0); putShort(5); putInt(pixmap); putInt(bitmapGc); putInt(0); putShort(1); putShort(1) })
+                output.write(bytes(32) { put(93); put(0); putShort(8); putInt(cursor); putInt(pixmap); putInt(pixmap) })
+                cursor
+            } else 0
+            output.write(bytes(24) {
+                put(26); put(0); putShort(6); putInt(window); putShort(0)
+                put(1); put(1); putInt(window); putInt(cursor); putInt(0)
+            })
+            output.flush()
+            val reply = ByteArray(32)
+            input.readFully(reply)
+            assertEquals("GrabPointer reply type", 1, reply[0].toInt())
+            assertEquals("GrabPointer status", 0, reply[1].toInt())
+        }
+        fun ungrabPointer() {
+            output.write(bytes(8) { put(27); put(0); putShort(2); putInt(0) })
+            output.write(bytes(8) { put(4); put(0); putShort(2); putInt(base or 5) })
+            queryPointer() // A round trip waits for the preceding request.
+        }
         fun pixel(): Int {
             output.write(bytes(20) { put(73);put(2);putShort(5);putInt(root);putShort((width/2).toShort());putShort((height/2).toShort());putShort(1);putShort(1);putInt(-1) });output.flush()
             val reply=ByteArray(32);input.readFully(reply)
@@ -290,7 +419,7 @@ class NativeDisplayTest {
             output.write(bytes(4) { put(43);put(0);putShort(1) });output.flush()
             val reply=ByteArray(32);input.readFully(reply);check(reply[0].toInt()==1)
         }
-        fun selectRawButtons() {
+        fun selectRawButtons(includeMotion: Boolean = false) {
             val name = "XInputExtension".toByteArray()
             val size = 8 + pad(name.size)
             output.write(bytes(size) { put(98); put(0); putShort((size / 4).toShort()); putShort(name.size.toShort()); putShort(0); put(name) })
@@ -306,7 +435,7 @@ class NativeDisplayTest {
             // Same XI2 raw button selection on the root window as xinput test-xi2 --root.
             output.write(bytes(20) {
                 put(xiOpcode); put(46); putShort(5); putInt(root); putShort(1); putShort(0)
-                putShort(1); putShort(1); putInt((1 shl 15) or (1 shl 16))
+                putShort(1); putShort(1); putInt((1 shl 15) or (1 shl 16) or (if (includeMotion) 1 shl 17 else 0))
             })
             output.write(bytes(4) { put(43); put(0); putShort(1) })
             output.flush()
@@ -328,19 +457,29 @@ class NativeDisplayTest {
             }
             error("Key events missing")
         }
-        fun rawButtonsBeforeKeyRelease(): List<Pair<Int, Int>> {
-            val raw = mutableListOf<Pair<Int, Int>>()
+        fun rawButtonsBeforeKeyRelease() = rawPointerBeforeKeyRelease().first
+        fun rawPointerBeforeKeyRelease(): Pair<List<Pair<Int, Int>>, List<Pair<Double, Double>>> {
+            val buttons = mutableListOf<Pair<Int, Int>>()
+            val motion = mutableListOf<Pair<Double, Double>>()
             repeat(48) {
                 val reply = ByteArray(32)
                 input.readFully(reply)
                 val type = reply[0].toInt() and 127
                 check(type != 0) { "X11 input error: ${reply.joinToString()}" }
-                if (type == 3) return raw
+                if (type == 3) return buttons to motion
                 if (type == 35) {
                     val data = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
-                    input.readFully(ByteArray(data.getInt(4) * 4))
+                    val values = ByteBuffer.allocate(data.getInt(4) * 4).order(ByteOrder.LITTLE_ENDIAN)
+                    input.readFully(values.array())
                     val eventType = data.getShort(8).toInt()
-                    if (reply[1] == xiOpcode && eventType in 15..16) raw += eventType to data.getInt(16)
+                    if (reply[1] != xiOpcode) return@repeat
+                    if (eventType in 15..16) buttons += eventType to data.getInt(16)
+                    if (eventType == 17 && values.getInt(0) == 3) {
+                        // Skip the valuator mask and two processed FP3232 values.
+                        val rawOffset = (data.getShort(22).toInt() and 0xffff) * 4 + 16
+                        fun rawAxis(offset: Int) = values.getInt(offset) + values.getInt(offset + 4).toUInt().toDouble() / 4294967296.0
+                        motion += rawAxis(rawOffset) to rawAxis(rawOffset + 8)
+                    }
                 }
             }
             error("End of mouse input missing")

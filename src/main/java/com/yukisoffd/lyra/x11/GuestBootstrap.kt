@@ -9,6 +9,15 @@ object GuestBootstrap {
         return "/tmp/lyra-x11-$sessionId"
     }
     fun socketDirectory(sessionId: String): String = directory(sessionId).replace("/lyra-x11-", "/lyra-rfb-")
+
+    fun graphicsProbeCommand(display: Int, sessionId: String, media: GuestMedia,
+        backend: GraphicsBackend, nativeAuthority: String?): String {
+        require(display in 1..999 && backend.requiresVulkan)
+        val state = directory(sessionId)
+        return "export DISPLAY=:$display XAUTHORITY=${quote(nativeAuthority ?: "$state/Xauthority")} " +
+            "XDG_RUNTIME_DIR=${quote("$state/runtime")}\n" +
+            "exec /bin/sh ${quote("${media.directory}/vulkan-graphics.sh")} ${backend.id} ${quote(media.directory)} ${quote(state)}"
+    }
     fun command(display: Int, options: GuiOptions, sessionId: String, media: GuestMedia? = null, nativeAuthority: String? = null): String {
         require(display in 1..999)
         if(nativeAuthority != null) return nativeCommand(display,options,sessionId,media,nativeAuthority)

@@ -1,4 +1,10 @@
 {
-  "arm64-v8a": "8cfb635183dc4562c8ea44b3224447bf56ab5b84fc8596fd89a4ad9a7bcf1ca3",
-  "x86_64": "e08d356ecb3fc81fc26ecb940893b7c092eaa224b7cd8c487d00e995da7cd1d5"
+  "arm64-v8a": {
+    "liblyra_virgl_exec.so": "ef94680a46b1c437085e0774c0661b7e31a3449d526089914787086109291d14",
+    "liblyra_venus_exec.so": "e09c2e7b56e8dfcb14c256070ca956e3d0d3ca6502651279bbf3e38c76e98177"
+  },
+  "x86_64": {
+    "liblyra_virgl_exec.so": "dcdbf776188d36f98f05c470898a2e9bd6505ca1a011d77d4922aa8de52cc887",
+    "liblyra_venus_exec.so": "5cf2151c25b2aff2ee5ed4030d20b70712b7b2abc76b97cc23a1e6368ff556b4"
+  }
 }

@@ -50,6 +50,93 @@ class NativeMediaTest {
         assertFalse(owned.exists())
     }
 
+    @Test fun venusVtestDisconnectsOnlyTheClientWhoseRendererDied() {
+        val nativeDirectory = File(context.applicationInfo.nativeLibraryDir)
+        val binary = File(nativeDirectory, "liblyra_virgl_exec.so")
+        val venus = File(nativeDirectory, "liblyra_venus_exec.so")
+        assertTrue("Venus render server must be extracted and executable", venus.canExecute())
+        val socket = File(context.cacheDir, "venus-test")
+        val log = File(context.cacheDir, "venus-test.log")
+        val server = ProcessBuilder(binary.absolutePath, "--no-virgl", "--venus", "--socket-path", socket.absolutePath)
+            .redirectErrorStream(true).redirectOutput(log).apply {
+                environment()["RENDER_SERVER_EXEC_PATH"] = venus.absolutePath
+            }.start()
+        try {
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (!socket.exists() && server.isAlive && System.nanoTime() < deadline) Thread.sleep(20)
+            assertTrue(log.readText(), server.isAlive && socket.exists())
+            fun LocalSocket.createCommandBuffer() {
+                connect(LocalSocketAddress(socket.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
+                soTimeout = 5000
+                val input = DataInputStream(inputStream)
+                fun readWord() = Integer.reverseBytes(input.readInt())
+                fun send(vararg words: Int) = outputStream.write(ByteBuffer.allocate(words.size * 4)
+                    .order(ByteOrder.LITTLE_ENDIAN).apply { words.forEach(::putInt) }.array())
+                val name = "lyra-venus\u0000".toByteArray()
+                send(name.size, 8) // VCMD_CREATE_RENDERER
+                outputStream.write(name)
+                send(1, 11, 3) // VCMD_PROTOCOL_VERSION
+                assertEquals(listOf(1, 11, 3), List(3) { readWord() })
+                send(2, 16, 4, 0) // VCMD_GET_CAPSET, Venus capset ID 4
+                val size = readWord()
+                assertTrue("Venus capset size: $size", size in 2..1024)
+                assertEquals(16, readWord())
+                assertEquals(1, readWord())
+                input.readFully(ByteArray((size - 1) * 4))
+                send(1, 17, 4) // VCMD_CONTEXT_INIT
+                send(6, 18, 2, 1, 16384, 0, 0, 0) // Mappable host command buffer, blob ID 0
+                assertEquals(1, readWord())
+                assertEquals(18, readWord())
+                assertTrue(readWord() > 0)
+                assertTrue(input.read() >= 0)
+                val fds = ancillaryFileDescriptors
+                assertEquals(1, fds.size)
+                try { assertEquals(16384L, Os.fstat(fds.single()).st_size) }
+                finally { fds.forEach(Os::close) }
+            }
+            LocalSocket().use { client ->
+                client.createCommandBuffer()
+                val pid = Regex("proxy: proxy server with pid (\\d+)").findAll(log.readText())
+                    .map { it.groupValues[1].toInt() }.single()
+                val killedAt = System.nanoTime()
+                Os.kill(pid, OsConstants.SIGKILL)
+                client.soTimeout = 1500
+                assertEquals("The worker must close an idle client's connection", -1, client.inputStream.read())
+                android.util.Log.i("LyraMediaTest", "VENUS_RENDERER_DISCONNECT_MS=${(System.nanoTime() - killedAt) / 1_000_000.0}")
+                val loss = "LYRA_VENUS_RENDERER_LOST pid=$pid si_code=2 status=9"
+                val reaped = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+                while (loss !in log.readText() && System.nanoTime() < reaped) Thread.sleep(10)
+                assertTrue(log.readText(), loss in log.readText())
+                assertFalse(log.readText().contains("failed to destroy ctx"))
+            }
+            assertTrue("The session listener should survive a renderer loss", server.isAlive)
+            LocalSocket().use { it.createCommandBuffer() }
+        } finally {
+            server.destroyForcibly()
+            server.waitFor(5, TimeUnit.SECONDS)
+            socket.delete()
+            android.util.Log.i("LyraMediaTest", log.readText())
+            log.delete()
+        }
+    }
+
+    @Test fun failedVenusProbeRetiresItsListenerBeforeReleasingTheDesktop() {
+        val bridge = File(context.cacheDir, "vt-${System.nanoTime().toString(16)}").apply { mkdir() }
+        val id = "b8992841-0b1a-448f-a5da-b110dc0e64fd"
+        val directory = File(bridge, "b89928410b1a448f")
+        val options = GuiOptions(audio = AudioBackend.OFF, graphics = GraphicsBackend.VENUS)
+        try {
+            AndroidSessionMedia.create(context, bridge, id, options) {}.use { media ->
+                val virgl = checkNotNull(media.guest).virgl
+                assertTrue(File(directory, "virgl").exists())
+                media.graphicsProbeFinished("exit_1", "probe failed")
+                assertEquals("exit_1", File(directory, "vulkan.supervisor").readText())
+                assertEquals(if (virgl) "egl_gles_virgl" else "software", media.diagnostics()["host_graphics"])
+                assertEquals(virgl, File(directory, "virgl").exists())
+            }
+        } finally { bridge.delete() }
+    }
+
     @Test fun nativeEglAndVtestCapsWorkInTheApplicationUid() {
         val binary = File(context.applicationInfo.nativeLibraryDir, "liblyra_virgl_exec.so")
         assertTrue("Native PIE must be extracted and executable", binary.canExecute())

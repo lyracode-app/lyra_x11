@@ -1,6 +1,7 @@
 {
-  "build_renderer.py": "c12236f6fd14275f45cfe0d8a8cd34257359130aab454829fdf473495826ad5f",
-  "egl_probe.c": "c15fbe39d123fe84a3a18dc3713acd6ea866418f831bde523d754b06114e984f",
+  "build_renderer.py": "f5f443fa23ef1d1755ff490ac9daa80da59d00bb4d75fae8d9a24b5c398eeb51",
+  "egl_probe.c": "1f8d6a289ed62484789aa9c7a17e06e66699cb2ff7a87954a50fe606f71e0777",
+  "venus-android-blob.h": "f03202d9723b9c7b81aa87580eea9696533d3871948706d7376ccf3fa60c976b",
   "upstream/libepoxy-1.5.10.tar.gz": "a7ced37f4102b745ac86d6a70a9da399cc139ff168ba6b8002b4d8d43c900c15",
   "upstream/virglrenderer-1.3.0.tar.gz": "c0e7240311896b12025c17497750f72f4a38cdd59b8d7d7f514290855bcffbc5",
   "patches/0001-do-not-use-gbm.patch.beforehostbuild": "3c6c26054a8c575e7b19bc374bc0b5976506df10bed38dde46259e0252c87270",
@@ -14,5 +15,6 @@
   "patches/build.sh": "2ae3477b676fd920b49d765d88dc98e9f0e976e9493edbdee48bf416535687e4",
   "patches/COPYING-gl4es": "69a3049c77abd88658f6ad7cf6a5b6ceb5cf03b80e60f7c4657d90322cfab7bd",
   "patches/lyra-android-vtest-workers.patch": "2f626ce51065aa89a5145d1a7f5af93908d965cf3299823dff8566d5640426c6",
-  "patches/lyra-gles-conditional-render.patch": "8e65f3a33d8f037749942c7e427874b792c4fd9de613b5abceeafe5ce797facb"
+  "patches/lyra-gles-conditional-render.patch": "8e65f3a33d8f037749942c7e427874b792c4fd9de613b5abceeafe5ce797facb",
+  "venus-linear-image.h": "6a1017d996aad0ad4dcb9b2cbe0674b13448a61c3f7edc8a0bfd5a49e043a882"
 }

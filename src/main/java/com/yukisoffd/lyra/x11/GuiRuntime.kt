@@ -8,6 +8,7 @@ import com.yukisoffd.lyra.x11.rfb.RfbTransport
 interface GuiRuntime {
     fun environments(): List<GuiEnvironment>
     fun launch(environmentId: String, sessionId: String, command: String): GuiProcess
+    fun launchGraphicsProbe(environmentId: String, command: String): GuiProcess? = null
     fun transport(sessionId: String): RfbTransport
     fun prepareMedia(environmentId: String, sessionId: String, options: GuiOptions, log: (String) -> Unit): GuiMedia = GuiMedia.None
     fun prepareDisplay(environmentId: String, sessionId: String, display: Int, options: GuiOptions, log: (String) -> Unit): GuiDisplay? = null
@@ -24,6 +25,8 @@ interface GuiProcess : AutoCloseable {
     val input: InputStream
     val output: OutputStream
     val isAlive: Boolean
+    val exitCode: Int? get() = null
+    val supervisorPid: Int? get() = null
 }
 
 data class GuiOptions(
@@ -44,5 +47,10 @@ data class GuiOptions(
 }
 
 enum class AudioBackend(val id: String) { AUTO("auto"), PULSEAUDIO("pulseaudio"), PIPEWIRE("pipewire"), OFF("off") }
-enum class GraphicsBackend(val id: String) { AUTO("auto"), VIRGL("virgl"), SOFTWARE("software") }
+enum class GraphicsBackend(val id: String) {
+    AUTO("auto"), VIRGL("virgl"), SOFTWARE("software"), VENUS("venus"), TURNIP("turnip"), VIRGL_ANGLE("virgl_angle");
+
+    val requiresVirgl: Boolean get() = this == VIRGL || this == VIRGL_ANGLE
+    val requiresVulkan: Boolean get() = this == VENUS || this == TURNIP
+}
 enum class DisplayBackend(val id: String) { AUTO("auto"), NATIVE("native"), VNC("vnc") }

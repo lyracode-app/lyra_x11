@@ -6,6 +6,8 @@ interface GuiMedia : AutoCloseable {
     val guest: GuestMedia?
     fun diagnostics(): Map<String, Any>
     fun mute(muted: Boolean)
+    val graphicsProbeRequested: Boolean get() = true
+    fun graphicsProbeFinished(result: String, output: String) = Unit
     object None : GuiMedia {
         override val guest: GuestMedia? = null
         override fun diagnostics(): Map<String, Any> = mapOf("audio" to "off", "graphics" to "software")

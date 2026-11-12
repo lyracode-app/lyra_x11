@@ -35,7 +35,7 @@ class NativeDisplay private constructor(private val context: Context, private va
     private var controlOwned = false
     private val commands = ArrayBlockingQueue<() -> Unit>(4096)
     private val pointerQueue = PointerQueue<Unit>({ command -> enqueue { command(Unit) } }) { _, x, y, mask ->
-        lifetime.read { if (handle != 0L) nativePointer(handle, x, y, mask) }
+        lifetime.read { if (handle != 0L) nativePointer(handle, x.toFloat(), y.toFloat(), mask, false) }
     }
     private var writer: Thread? = null
     private val main = Handler(Looper.getMainLooper())
@@ -56,6 +56,7 @@ class NativeDisplay private constructor(private val context: Context, private va
     override val authority get() = "/run/lyra/$key/xs/auth"
     override val isAlive get() = !closed.get() && server?.isAlive == true && lifetime.read { handle != 0L && nativeAlive(handle) }
     override val hasFrame get() = lifetime.read { handle != 0L && nativeStats(handle)[0] > 0 }
+    override val pointerLocked get() = lifetime.read { handle != 0L && nativePointerLocked(handle) }
 
     private fun start() {
         require(Regex("[a-f0-9-]{36}").matches(sessionId))
@@ -137,14 +138,21 @@ class NativeDisplay private constructor(private val context: Context, private va
     override fun pointer(x: Int, y: Int, mask: Int, motionOnly: Boolean) {
         pointerQueue.pointer(x.coerceIn(0, options.width - 1), y.coerceIn(0, options.height - 1), mask, motionOnly)
     }
+    override fun relativePointer(dx: Float, dy: Float, mask: Int) {
+        // Relative deltas must survive queueing and keep their order with button events.
+        pointerQueue.ordered { lifetime.read { if (handle != 0L) nativePointer(handle, dx, dy, mask, true) } }
+    }
     override fun scroll(x: Int, y: Int, mask: Int, horizontal: Float, vertical: Float) {
         pointerQueue.ordered {
             lifetime.read {
                 if (handle != 0L) {
-                    nativeScroll(handle, x.coerceIn(0, options.width - 1), y.coerceIn(0, options.height - 1), horizontal, vertical)
+                    nativeScroll(handle, x.coerceIn(0, options.width - 1), y.coerceIn(0, options.height - 1), horizontal, vertical, true)
                 }
             }
         }
+    }
+    override fun relativeScroll(horizontal: Float, vertical: Float) {
+        pointerQueue.ordered { lifetime.read { if (handle != 0L) nativeScroll(handle, 0, 0, horizontal, vertical, false) } }
     }
     override fun surface(id: Long, surface: Surface?) {
         lifetime.read { if(handle != 0L) nativeSurface(handle,id,surface) }
@@ -200,8 +208,9 @@ class NativeDisplay private constructor(private val context: Context, private va
     private external fun nativeSurface(handle: Long,id: Long,surface: Surface?)
     private external fun nativeKey(handle: Long,symbol: Int,down: Boolean)
     private external fun nativeScanCode(handle: Long, code: Int, down: Boolean)
-    private external fun nativePointer(handle: Long,x: Int,y: Int,mask: Int)
-    private external fun nativeScroll(handle: Long, x: Int, y: Int, horizontal: Float, vertical: Float)
+    private external fun nativePointerLocked(handle: Long): Boolean
+    private external fun nativePointer(handle: Long, x: Float, y: Float, mask: Int, relative: Boolean)
+    private external fun nativeScroll(handle: Long, x: Int, y: Int, horizontal: Float, vertical: Float, position: Boolean)
     private external fun nativeStats(handle: Long): LongArray
     private external fun nativeCapture(handle: Long): IntArray?
 

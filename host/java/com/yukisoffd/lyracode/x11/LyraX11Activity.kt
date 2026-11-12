@@ -68,6 +68,11 @@ private class ProotGuiRuntime(private val context: Context) : GuiRuntime {
     }
     override fun transport(sessionId: String) = UnixRfbTransport(File(bridge(sessionId), "rfb").absolutePath)
 
+    override fun launchGraphicsProbe(environmentId: String, command: String): GuiProcess =
+        ProotGuiProcess(manager, manager.startCommand(environmentId, null, "/root",
+            "exec /bin/sh -c ${GuestBootstrap.quote(command)}", ids.getAndDecrement(),
+            background = false, mergeError = true))
+
     override fun launch(environmentId: String, sessionId: String, command: String): GuiProcess {
         require(Regex("[a-f0-9-]{36}").matches(sessionId))
         val rootfs = manager.instance(environmentId).rootfsDir
@@ -92,11 +97,14 @@ private class ProotGuiRuntime(private val context: Context) : GuiRuntime {
 }
 
 private class ProotGuiProcess(private val manager: ProotLinuxManager, private val started: ProotCommandProcess,
-    private val rootfs: File, private val sessionId: String, private val bridge: File) : GuiProcess {
+    private val rootfs: File? = null, private val sessionId: String = "", private val bridge: File? = null) : GuiProcess {
     private val closed = AtomicBoolean(false)
     override val input: InputStream get() = started.process.inputStream
     override val output: OutputStream get() = started.process.outputStream
     override val isAlive: Boolean get() = !closed.get() && started.process.isAlive
+    override val exitCode: Int? get() = runCatching { started.process.exitValue() }.getOrNull()
+    override val supervisorPid: Int?
+        get() = runCatching { started.supervisorPidFile.readText().trim().toInt() }.getOrNull()?.takeIf { it > 1 }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         val process = started.process
@@ -104,7 +112,7 @@ private class ProotGuiProcess(private val manager: ProotLinuxManager, private va
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
         var pid: Int? = null
         while (process.isAlive && System.nanoTime() < deadline) {
-            pid = runCatching { started.supervisorPidFile.readText().trim().toInt() }.getOrNull()?.takeIf { it > 1 }
+            pid = supervisorPid
             if (pid != null) break
             Thread.sleep(5)
         }
@@ -115,10 +123,12 @@ private class ProotGuiProcess(private val manager: ProotLinuxManager, private va
         runCatching { process.outputStream.close() }
         started.completionFile.delete()
         started.supervisorPidFile.delete()
+        val guestRootfs = rootfs ?: return
+        val ownedBridge = bridge ?: return
         // PRoot's forced shutdown may bypass the guest shell trap. Never follow guest symlinks while cleaning up.
         runCatching {
-            val root = rootfs.toPath().toRealPath()
-            val temp = File(rootfs, "tmp").toPath().toRealPath()
+            val root = guestRootfs.toPath().toRealPath()
+            val temp = File(guestRootfs, "tmp").toPath().toRealPath()
             if (!temp.startsWith(root)) return@runCatching
             val directory = temp.resolve("lyra-x11-$sessionId")
             if (!Files.exists(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return@runCatching
@@ -132,9 +142,9 @@ private class ProotGuiProcess(private val manager: ProotLinuxManager, private va
                 }
             })
         }
-        runCatching { File(rootfs, GuestBootstrap.socketDirectory(sessionId).removePrefix("/")).delete() }
+        runCatching { File(guestRootfs, GuestBootstrap.socketDirectory(sessionId).removePrefix("/")).delete() }
         runCatching {
-            Files.walkFileTree(bridge.toPath(), object : SimpleFileVisitor<Path>() {
+            Files.walkFileTree(ownedBridge.toPath(), object : SimpleFileVisitor<Path>() {
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                     Files.deleteIfExists(file); return FileVisitResult.CONTINUE
                 }

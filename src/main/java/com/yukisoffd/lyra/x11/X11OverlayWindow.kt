@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.view.Gravity
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.Button
@@ -41,6 +42,10 @@ internal class X11OverlayWindow(private val context: Context, private val sessio
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     private fun focusOnTouch(view: X11DisplayView) {
         view.setOnTouchListener { _, event -> if (event.actionMasked == MotionEvent.ACTION_DOWN) focus(); false }
+        view.setOnGenericMotionListener { _, event ->
+            if (event.isFromSource(InputDevice.SOURCE_MOUSE) && event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) focus()
+            false
+        }
     }
 
     fun show(target: GuiSession) {
@@ -159,8 +164,12 @@ internal class X11OverlayWindow(private val context: Context, private val sessio
     }
     private fun update() { root?.let { panel -> params?.let { runCatching { windows.updateViewLayout(panel, it) } } } }
     private fun focus() {
-        params?.let { it.flags = it.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv() }
-        update(); display?.requestFocus()
+        val layout = params ?: return
+        if (layout.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) {
+            layout.flags = layout.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            update()
+        }
+        display?.requestFocus()
     }
     fun refresh() {
         val target = session ?: return

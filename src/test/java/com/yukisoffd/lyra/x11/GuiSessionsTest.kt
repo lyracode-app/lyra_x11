@@ -66,6 +66,40 @@ class GuiSessionsTest {
         }
         assertEquals(1,base.processes.size)
     }
+
+    @Test fun failedVulkanProbeReleasesTheDesktopAndPreservesTheTracerDiagnostic() {
+        val base = Runtime()
+        val probe = FakeProcess()
+        val warning = "proot warning: signal 11 received from process 123\n"
+        val finished = CountDownLatch(1)
+        var completion: Pair<String, String>? = null
+        val runtime = object : GuiRuntime by base {
+            override fun prepareMedia(environmentId: String, sessionId: String, options: GuiOptions, log: (String) -> Unit) =
+                object : GuiMedia by GuiMedia.None {
+                    override val guest = GuestMedia("/run/lyra/${sessionId.replace("-", "").take(16)}", true)
+                    override fun graphicsProbeFinished(result: String, output: String) {
+                        completion = result to output
+                        finished.countDown()
+                    }
+                }
+            override fun launchGraphicsProbe(environmentId: String, command: String): GuiProcess =
+                object : GuiProcess by probe {
+                    override val input = ByteArrayInputStream(warning.toByteArray())
+                    override val isAlive = false
+                    override val exitCode = 1
+                    override val supervisorPid = 456
+                }
+        }
+        GuiSessions(runtime).use { sessions ->
+            val target = sessions.start("a", GuiOptions(graphics = GraphicsBackend.VENUS, displayBackend = DisplayBackend.VNC))
+            assertTrue(finished.await(3, TimeUnit.SECONDS))
+            assertEquals("exit_1" to "PRoot tracer pid=456 result=exit_1\n$warning", completion)
+            assertTrue(probe.stopped.get())
+            assertTrue(base.processes.single().second.isAlive)
+            assertTrue(target.logText().contains(warning))
+            assertTrue(sessions.hasRunningSessions())
+        }
+    }
     @Test fun explicitNativeFailureNeverLaunchesGuestAndExplicitVncSkipsNative() {
         val base=Runtime();val calls=java.util.concurrent.atomic.AtomicInteger()
         val runtime=object : GuiRuntime by base {

@@ -5,7 +5,79 @@ def edit(path, old, new, count=-1):
     if old not in text: raise RuntimeError(f'Missing integration anchor: {path}: {old[:80]}')
     path.write_text(text.replace(old,new,count),encoding='utf-8',newline='\n')
 
+def sync_imported_dma_bufs(source):
+    buffer = source/'lorie/buffer.c'
+    if 'lyraSyncDmaBuf' in buffer.read_text(encoding='utf-8'):
+        return
+    edit(buffer, '#include <linux/memfd.h>', '#include <linux/memfd.h>\n#include <linux/dma-buf.h>', count=1)
+    edit(buffer, '    int8_t locked;', '    bool importedDmaBuf;\n    int8_t locked;', count=1)
+    edit(buffer, '__LIBC_HIDDEN__ LorieBuffer* LorieBuffer_wrapFileDescriptor',
+         '''static int lyraSyncDmaBuf(int fd, uint64_t flags) {
+    struct dma_buf_sync sync = { .flags = flags };
+    int ret;
+    do {
+        ret = ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+    } while (ret < 0 && errno == EINTR);
+    return ret;
+}
+
+__LIBC_HIDDEN__ LorieBuffer* LorieBuffer_wrapFileDescriptor''', count=1)
+    edit(buffer, '    return allocate(width, stride, height, format, LORIEBUFFER_FD, NULL, fd, stride * height * sizeof(uint32_t), offset, false);',
+         '''    LorieBuffer* buffer = allocate(width, stride, height, format, LORIEBUFFER_FD, NULL, fd,
+                                   stride * height * sizeof(uint32_t), offset, false);
+    if (buffer && lyraSyncDmaBuf(buffer->fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ) == 0) {
+        lyraSyncDmaBuf(buffer->fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+        buffer->importedDmaBuf = true;
+    }
+    return buffer;''', count=1)
+    edit(buffer, '    if (buffer->desc.type == LORIEBUFFER_REGULAR || buffer->desc.type == LORIEBUFFER_FD)\n        buffer->lockedData',
+         '''    if (buffer->importedDmaBuf &&
+        lyraSyncDmaBuf(buffer->fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW) < 0)
+        return errno;
+
+    if (buffer->desc.type == LORIEBUFFER_REGULAR || buffer->desc.type == LORIEBUFFER_FD)
+        buffer->lockedData''', count=1)
+    edit(buffer, '    buffer->lockedData = NULL;\n    buffer->locked = false;\n\n    return ret;',
+         '''    if (buffer->importedDmaBuf &&
+        lyraSyncDmaBuf(buffer->fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW) < 0)
+        ret = errno;
+
+    buffer->lockedData = NULL;
+    buffer->locked = false;
+    return ret;''', count=1)
+
+def pointer_lock(source):
+    header = source/'lorie/lorie.h'
+    if 'lyraPointerLocked' in header.read_text(encoding='utf-8'):
+        return
+    edit(header, '    volatile uint8_t waitForNextFrame;',
+         '    volatile uint8_t waitForNextFrame;\n    uint8_t lyraPointerLocked;')
+    output = source/'lorie/InitOutput.c'
+    edit(output, 'static void lorieSetCursor(DeviceIntPtr',
+         'static Bool lyraCursorHidden;\n\nstatic void lorieSetCursor(DeviceIntPtr', count=1)
+    edit(output, '    if (pCurs && (pCurs->bits->width >= 512',
+         '    lyraCursorHidden = !bits || bits->emptyMask;\n\n    if (pCurs && (pCurs->bits->width >= 512', count=1)
+    edit(output, '    lorieRequestLockRelease();\n}\n\nstatic void lorieBlockHandler', '''    // Passive and implicit grabs also occur during normal desktop drags.
+    DeviceIntPtr pointer = inputInfo.pointer;
+    Bool locked = pointer && pointer->deviceGrab.grab &&
+                  !pointer->deviceGrab.fromPassiveGrab && !pointer->deviceGrab.implicitGrab &&
+                  lyraCursorHidden;
+    __atomic_store_n(&pvfb->state->lyraPointerLocked, locked, __ATOMIC_RELEASE);
+    lorieRequestLockRelease();
+}
+
+static void lorieBlockHandler''', count=1)
+    core = source/'lyra/server_core.inc'
+    edit(core, 'flags = (e.mouse.relative) ? POINTER_RELATIVE | POINTER_ACCELERATE : POINTER_ABSOLUTE | POINTER_SCREEN | POINTER_NORAW;',
+         '''// Lyra touch deltas are already scaled to desktop pixels.
+                        if (e.mouse.relative == 2)
+                            flags = POINTER_RELATIVE;
+                        else
+                            flags = e.mouse.relative ? POINTER_RELATIVE | POINTER_ACCELERATE : POINTER_ABSOLUTE | POINTER_SCREEN | POINTER_NORAW;''', count=1)
+
 def adapt(source):
+    sync_imported_dma_bufs(source)
+    pointer_lock(source)
     # The event loop reuses its mask. Motion must not carry over a previous wheel axis.
     core=source/'lyra/server_core.inc'
     motion='                    case 0: // BUTTON_UNDEFINED\n'

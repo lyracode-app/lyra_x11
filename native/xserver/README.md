@@ -28,6 +28,8 @@ All EGL Surface creation/destruction runs on that renderer thread. JNI queues up
 
 VNC remains a separate backend. AUTO fallback happens before launching the guest desktop command. Runtime failure never silently re-executes user code. Ordinary X11 drawing may still use CPU, and guest Mesa virpipe may still read back application rendering; this integration does not provide universal Linux DRM/Vulkan drivers.
 
+Linear DMA-BUF pixmaps imported through DRI3 synchronize CPU cache access when the X server maps them for drawing or copying. This path can consume a Vulkan swapchain image directly as a pixmap while still copying its pixels into the desktop framebuffer.
+
 ## Licenses and tests
 
 Termux-X11 is GPL-3.0; its X.Org and supporting libraries retain their original licenses. InputXKB has GPL-2.0-or-later notices. Full source notices remain in the archives; redistributable license texts are packaged under `assets/lyra_x11/licenses/xserver`. Lyra's new integration code follows the repository's AGPL-3.0 license. See `XKB-COPYRIGHT` for keyboard data.

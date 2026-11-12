@@ -31,6 +31,7 @@ class GuiSession internal constructor(val id: String, val environment: GuiEnviro
         client?.active = visible
     }
     @Volatile internal var process: GuiProcess? = null
+    internal var graphicsProbe: GuiProcess? = null
     @Volatile internal var media: GuiMedia = GuiMedia.None
     fun mediaDiagnostics(): Map<String, Any> = media.diagnostics()
     @Volatile var audioMuted = false; private set
@@ -126,6 +127,10 @@ class GuiSessions(val runtime: GuiRuntime) : AutoCloseable {
                     }
                 } catch (_: Exception) { /* Closing the supervisor closes its log stream. */ }
             }
+            if (session.options.graphics.requiresVulkan && session.media.guest != null) {
+                probeGraphics(session, process)
+            }
+            if (session.closed.get()) return
             session.nativeDisplay?.let { display ->
                 session.status = GuiStatus.CONNECTED
                 changed()
@@ -177,13 +182,78 @@ class GuiSessions(val runtime: GuiRuntime) : AutoCloseable {
             synchronized(session) {
                 session.closed.set(true)
                 session.client?.close()
+                session.graphicsProbe?.close()
                 session.process?.close()
                 session.nativeDisplay?.close()
                 session.media.close()
                 session.process = null
+                session.graphicsProbe = null
                 session.client = null
                 session.framebuffer = null
                 session.released.set(true)
+            }
+            changed()
+        }
+    }
+
+    private fun probeGraphics(session: GuiSession, desktop: GuiProcess) {
+        var result = "probe_not_started"
+        var supervisorPid: Int? = null
+        val probeOutput = StringBuffer()
+        try {
+            val readyDeadline = System.nanoTime() + 40_000_000_000L
+            while (!session.closed.get() && desktop.isAlive && !session.media.graphicsProbeRequested &&
+                System.nanoTime() < readyDeadline) Thread.sleep(50)
+            if (!desktop.isAlive || !session.media.graphicsProbeRequested) {
+                result = if (desktop.isAlive) "probe_not_requested" else "desktop_exited"
+                return
+            }
+            val probe = synchronized(session) {
+                if (session.closed.get()) return
+                val command = GuestBootstrap.graphicsProbeCommand(session.display, session.id, checkNotNull(session.media.guest),
+                    session.options.graphics, session.nativeDisplay?.authority)
+                runtime.launchGraphicsProbe(session.environment.id, command)?.also { session.graphicsProbe = it }
+            } ?: return
+            probe.output.close()
+            val logging = executor.submit {
+                runCatching {
+                    probe.input.bufferedReader().use { reader ->
+                        val chars = CharArray(1024)
+                        while (true) {
+                            val size = reader.read(chars)
+                            if (size < 0) break
+                            probeOutput.append(chars, 0, size)
+                            if (probeOutput.length > 4096) probeOutput.delete(0, probeOutput.length - 4096)
+                        }
+                    }
+                }
+            }
+            val deadline = System.nanoTime() + 85_000_000_000L
+            while (!session.closed.get() && desktop.isAlive && probe.isAlive && System.nanoTime() < deadline) Thread.sleep(50)
+            result = when {
+                !desktop.isAlive -> "desktop_exited"
+                probe.isAlive -> "probe_timeout"
+                else -> "exit_${probe.exitCode ?: "unknown"}"
+            }
+            if (!probe.isAlive) runCatching { logging.get(1, java.util.concurrent.TimeUnit.SECONDS) }
+            supervisorPid = probe.supervisorPid
+        } catch (error: Exception) {
+            result = "probe_error"
+            session.append("LYRA_GPU: Isolated graphics probe failed: ${error.message}\n")
+        } finally {
+            synchronized(session) {
+                runCatching { session.graphicsProbe?.close() }.onFailure {
+                    session.append("LYRA_GPU: Unable to close graphics probe: ${it.message}\n")
+                }
+                session.graphicsProbe = null
+                if (!session.closed.get()) {
+                    val output = "PRoot tracer pid=${supervisorPid ?: "unavailable"} result=$result\n$probeOutput"
+                    if (output.isNotBlank()) session.append("Vulkan probe:\n$output\n")
+                    session.append("LYRA_GPU: Isolated graphics probe finished ($result).\n")
+                    runCatching { session.media.graphicsProbeFinished(result, output) }.onFailure {
+                        session.append("LYRA_GPU: Unable to publish graphics probe result: ${it.message}\n")
+                    }
+                }
             }
             changed()
         }
@@ -197,10 +267,12 @@ class GuiSessions(val runtime: GuiRuntime) : AutoCloseable {
         synchronized(session) {
             session.closed.set(true)
             session.client?.close()
+            session.graphicsProbe?.close()
             session.process?.close()
             session.nativeDisplay?.close()
             session.media.close()
             session.process = null
+            session.graphicsProbe = null
             session.client = null
             session.framebuffer = null
             session.status = GuiStatus.STOPPED

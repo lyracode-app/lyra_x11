@@ -17,6 +17,7 @@ import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.SurfaceView
 import android.view.SurfaceHolder
 import android.widget.FrameLayout
@@ -69,7 +70,11 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
         destination.set(left,top,left+w*scale,top+h*scale)
     }
     override fun onInterceptTouchEvent(event: MotionEvent) = true
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); syncNativeSurface(); invalidate() }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); syncNativeSurface(); watchMouseCapture(); invalidate() }
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        watchMouseCapture()
+    }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh);updateDestination() }
     companion object {
         private val nextSurfaceId = AtomicLong()
@@ -108,15 +113,44 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     private var dragging = false
     private var multiTouch = false
     private var touchInProgress = false
+    private var touchLocked = false
+    private var touchLookMoved = false
+    private var touchX = 0f
+    private var touchY = 0f
+    private val touchSlopSquared = ViewConfiguration.get(context).scaledTouchSlop.toFloat().let { it * it }
     private var pendingAccent = 0
     private var pendingKeyboard = false
+    private var mouseCaptureRequested = false
+    private val mouseCapturePoll = object : Runnable {
+        override fun run() {
+            val target = session
+            // The X server can grab or ungrab the pointer without changing the framebuffer.
+            val watch = isAttachedToWindow && isShown && windowVisibility == VISIBLE && isFocused && hasWindowFocus() &&
+                target != null && !target.closed.get() &&
+                (target.nativeDisplay != null || target.status == GuiStatus.STARTING && target.options.displayBackend != DisplayBackend.VNC)
+            setMouseCapture(watch && target?.nativeDisplay?.pointerLocked == true)
+            if (watch) postDelayed(this, 50L)
+        }
+    }
+
+    private fun watchMouseCapture() {
+        removeCallbacks(mouseCapturePoll)
+        mouseCapturePoll.run()
+    }
+
+    private fun setMouseCapture(capture: Boolean) {
+        if (mouseCaptureRequested == capture) return
+        mouseCaptureRequested = capture
+        if (capture) requestPointerCapture() else releasePointerCapture()
+    }
+
     var session: GuiSession? = null
         set(value) {
             if (field === value) return
             releaseInput()
             attachedDisplay?.surface(surfaceId,null); attachedDisplay = null
             field = value
-            syncNativeSurface(); updateDestination()
+            syncNativeSurface(); updateDestination(); watchMouseCapture()
             bitmap = null
             bitmapRevision = -1L
             cursorBitmap = null
@@ -127,10 +161,12 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
-        override fun onSingleTapUp(e: MotionEvent): Boolean { if (!multiTouch) performClick(); return true }
-        override fun onLongPress(e: MotionEvent) { if (touchInProgress && !dragging && !multiTouch) click(4) }
+        override fun onSingleTapUp(e: MotionEvent): Boolean { if (!multiTouch && !touchLookMoved) performClick(); return true }
+        override fun onLongPress(e: MotionEvent) {
+            if (touchInProgress && !dragging && !multiTouch && session?.nativeDisplay?.pointerLocked != true) click(4)
+        }
         override fun onScroll(first: MotionEvent?, current: MotionEvent, dx: Float, dy: Float): Boolean {
-            if (!multiTouch && current.pointerCount == 1) {
+            if (!touchLocked && !multiTouch && current.pointerCount == 1) {
                 if (!dragging) { dragging = true; buttonMask = 1; sendPointer() }
                 move(current.x, current.y)
             }
@@ -227,9 +263,14 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     }
 
     private fun sendPointer(motion: Boolean = false) { session?.input?.pointer(pointerX, pointerY, buttonMask, motion) }
+    private fun sendTouchButtons(mask: Int, lockedDisplay: GuiDisplay?) {
+        if (lockedDisplay != null) lockedDisplay.relativePointer(0f, 0f, mask)
+        else session?.input?.pointer(pointerX, pointerY, mask)
+    }
     private fun click(mask: Int) {
-        session?.input?.pointer(pointerX, pointerY, buttonMask or mask)
-        session?.input?.pointer(pointerX, pointerY, buttonMask)
+        val lockedDisplay = session?.nativeDisplay?.takeIf { it.pointerLocked }
+        sendTouchButtons(buttonMask or mask, lockedDisplay)
+        sendTouchButtons(buttonMask, lockedDisplay)
     }
     override fun performClick(): Boolean {
         if (tracePointerEvents) session?.tracePointer("simulated left click")
@@ -242,62 +283,119 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         requestFocus()
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)) return onCapturedPointerEvent(event)
         // A mouse tool can arrive through touch dispatch with a different source.
         if (event.isFromSource(InputDevice.SOURCE_MOUSE) || event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
             handleMouse(event)
             return true
         }
+        val target = session
+        val lockedDisplay = target?.nativeDisplay?.takeIf { it.pointerLocked }
+        touchLocked = lockedDisplay != null
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touchInProgress = true
             tracePointer(event, "touch")
+            touchLookMoved = false
             multiTouch = false; dragging = false; scrollY = event.y
-            move(event.x, event.y)
+            if (!touchLocked) move(event.x, event.y)
         } else if (!touchInProgress) return true
+        if (lockedDisplay != null && dragging) {
+            dragging = false
+            buttonMask = 0
+            sendTouchButtons(buttonMask, lockedDisplay)
+        }
         if (event.pointerCount > 1) {
-            if (!multiTouch) { multiTouch = true; buttonMask = 0; sendPointer(); scrollY = event.y }
+            if (!multiTouch) {
+                multiTouch = true; buttonMask = 0; scrollY = event.y
+                sendTouchButtons(buttonMask, lockedDisplay)
+            }
             if (event.actionMasked == MotionEvent.ACTION_MOVE) {
                 val delta = event.y - scrollY
                 if (abs(delta) >= 24 * resources.displayMetrics.density) {
                     click(if (delta > 0) 8 else 16); scrollY = event.y
                 }
             }
-        } else if (!multiTouch && event.actionMasked == MotionEvent.ACTION_MOVE) move(event.x, event.y)
+        } else if (!multiTouch && event.actionMasked == MotionEvent.ACTION_MOVE) {
+            if (lockedDisplay == null) move(event.x, event.y)
+            else if (destination.width() > 0f && destination.height() > 0f) {
+                val dx = event.x - touchX
+                val dy = event.y - touchY
+                if (touchLookMoved || dx * dx + dy * dy > touchSlopSquared) {
+                    touchLookMoved = true
+                    if (dx != 0f || dy != 0f) lockedDisplay.relativePointer(
+                        dx * target.options.width / destination.width(),
+                        dy * target.options.height / destination.height(), buttonMask,
+                    )
+                }
+            }
+        }
+        // Preserve the initial movement while a locked touch is still within tap slop.
+        if (!touchLocked || event.actionMasked != MotionEvent.ACTION_MOVE || touchLookMoved) {
+            touchX = event.x; touchY = event.y
+        }
         gestures.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             tracePointer(event, "touch")
             touchInProgress = false
-            buttonMask = 0; dragging = false; sendPointer()
+            buttonMask = 0; dragging = false
+            sendTouchButtons(buttonMask, lockedDisplay)
         }
         return true
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)) return onCapturedPointerEvent(event)
         if (!event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) return super.onGenericMotionEvent(event)
         handleMouse(event)
         return true
     }
 
-    private fun handleMouse(event: MotionEvent) {
-        updatePointer(event.x, event.y)
-        when (event.actionMasked) {
+    override fun onCapturedPointerEvent(event: MotionEvent): Boolean {
+        if (!event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)) return super.onCapturedPointerEvent(event)
+        handleMouse(event, captured = true)
+        return true
+    }
+
+    private fun handleMouse(event: MotionEvent, captured: Boolean = false) {
+        val display = session?.nativeDisplay
+        val locked = display?.pointerLocked == true
+        if (captured && display == null) return
+        val relativeDisplay = display?.takeIf { locked || captured }
+        val action = event.actionMasked
+        if (relativeDisplay == null) updatePointer(event.x, event.y)
+        else if (locked && (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_HOVER_MOVE ||
+                captured && (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP))) {
+            // Android can attach movement to a captured DOWN/UP and send a second button event.
+            val xAxis = if (captured) MotionEvent.AXIS_X else MotionEvent.AXIS_RELATIVE_X
+            val yAxis = if (captured) MotionEvent.AXIS_Y else MotionEvent.AXIS_RELATIVE_Y
+            var dx = event.getAxisValue(xAxis)
+            var dy = event.getAxisValue(yAxis)
+            for (index in 0 until event.historySize) {
+                dx += event.getHistoricalAxisValue(xAxis, index)
+                dy += event.getHistoricalAxisValue(yAxis, index)
+            }
+            if (dx.isFinite() && dy.isFinite() && (dx != 0f || dy != 0f)) relativeDisplay.relativePointer(dx, dy, buttonMask)
+        }
+        when (action) {
             MotionEvent.ACTION_SCROLL -> {
                 val horizontal = wheelDelta(event.getAxisValue(MotionEvent.AXIS_HSCROLL))
                 val vertical = wheelDelta(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
                 if (horizontal != 0f || vertical != 0f) {
-                    session?.input?.scroll(pointerX, pointerY, buttonMask, horizontal, vertical)
+                    if (relativeDisplay != null) relativeDisplay.relativeScroll(horizontal, vertical)
+                    else session?.input?.scroll(pointerX, pointerY, buttonMask, horizontal, vertical)
                 }
             }
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> forwardMouseButtons(event)
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> forwardMouseButtons(event, relativeDisplay)
             MotionEvent.ACTION_CANCEL -> {
                 tracePointer(event, "mouse")
                 releaseInput()
             }
-            else -> sendPointer(true)
+            else -> if (relativeDisplay == null) sendPointer(true)
         }
     }
 
-    private fun forwardMouseButtons(event: MotionEvent) {
+    private fun forwardMouseButtons(event: MotionEvent, relativeDisplay: GuiDisplay?) {
         val buttons = mouseButtons(event.buttonState)
         val action = event.actionMasked
         val report = MouseButtonReport(
@@ -318,7 +416,7 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
         if (mouseButtonHistory.size == MOUSE_BUTTON_HISTORY_SIZE) mouseButtonHistory.removeFirst()
         mouseButtonHistory.addLast(report)
         buttonMask = buttons
-        sendPointer()
+        sendTouchButtons(buttonMask, relativeDisplay)
     }
 
     private fun tracePointer(event: MotionEvent, route: String) {
@@ -404,23 +502,30 @@ class X11DisplayView(context: Context) : FrameLayout(context) {
     }
 
     fun releaseInput() {
+        setMouseCapture(false)
         pendingKeyboard = false
         touchInProgress = false
         if (tracePointerEvents && buttonMask != 0) session?.tracePointer("release input mask=$buttonMask")
         session?.input?.let { client -> pressed.values.forEach { it.send(client, false) } }
         pressed.clear(); buttonMask = 0; pendingAccent = 0
-        sendPointer()
+        sendTouchButtons(buttonMask, session?.nativeDisplay)
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         if (!hasWindowFocus) releaseInput()
         super.onWindowFocusChanged(hasWindowFocus)
+        watchMouseCapture()
         if (hasWindowFocus) post { openPendingKeyboard() }
     }
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         if (!gainFocus) releaseInput()
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        watchMouseCapture()
     }
-    override fun onDetachedFromWindow() { releaseInput(); attachedDisplay?.surface(surfaceId,null); attachedDisplay = null; super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() {
+        removeCallbacks(mouseCapturePoll)
+        releaseInput(); attachedDisplay?.surface(surfaceId,null); attachedDisplay = null
+        super.onDetachedFromWindow()
+    }
     override fun onCheckIsTextEditor(): Boolean = true
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         val inputSession = session

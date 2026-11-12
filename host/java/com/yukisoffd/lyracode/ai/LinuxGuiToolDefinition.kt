@@ -1,5 +1,6 @@
 package com.yukisoffd.lyracode.ai
 
+import com.yukisoffd.lyra.x11.GraphicsBackend
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,8 +21,8 @@ internal fun linuxGuiToolDefinition(): JSONObject {
         .put("description", "Session frame-rate cap. Actual presentation also depends on the Android display and workload."))
     properties.put("audio", JSONObject().put("type", "string").put("enum", JSONArray(listOf("auto", "pulseaudio", "pipewire", "off")))
         .put("description", "Audio backend for start. Default reuses saved profile; auto prefers PulseAudio, then PipeWire. Follow guide for guest packages."))
-    properties.put("graphics", JSONObject().put("type", "string").put("enum", JSONArray(listOf("auto", "virgl", "software")))
-        .put("description", "Graphics for start: auto validates Android EGL and guest Mesa virpipe, otherwise uses software; virgl requires validation to succeed. No Turnip is needed."))
+    properties.put("graphics", JSONObject().put("type", "string").put("enum", JSONArray(GraphicsBackend.entries.map { it.id }))
+        .put("description", "Graphics for start. auto tries VirGL then software. virgl_angle uses ANGLE Vulkan on Mali-G925 and requires desktop OpenGL 3.3 in the guest. venus tries guest Vulkan through Mesa Venus. turnip requires a guest KGSL Turnip driver for Adreno. Both guest Vulkan modes validate X11 presentation and try Zink. Follow guide for packages."))
     properties.put("display_backend", JSONObject().put("type", "string").put("enum", JSONArray(listOf("auto", "native", "vnc")))
         .put("description", "Display transport: auto prefers the embedded X11/AHardwareBuffer renderer and falls back before launch; native requires it; vnc forces the compatible fallback."))
     properties.put("muted", JSONObject().put("type", "boolean").put("description", "Required for action=audio: mute or resume this session's Android output."))

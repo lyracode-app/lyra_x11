@@ -143,9 +143,20 @@ JNI(void) METHOD(nativeScanCode)(JNIEnv*, jobject, jlong ptr, jint code, jboolea
     sendEvent(client, event);
     pthread_mutex_unlock(&client->writer);
 }
-JNI(void) METHOD(nativePointer)(JNIEnv*,jobject,jlong ptr,jint x,jint y,jint buttons) {
+JNI(jboolean) METHOD(nativePointerLocked)(JNIEnv*, jobject, jlong ptr) {
+    auto *client = (Client*)ptr;
+    auto &renderer = client->r;
+    pthread_mutex_lock(&renderer.stateLock);
+    bool locked = renderer.state && __atomic_load_n(&renderer.state->lyraPointerLocked, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(&renderer.stateLock);
+    return locked;
+}
+JNI(void) METHOD(nativePointer)(JNIEnv*,jobject,jlong ptr,jfloat x,jfloat y,jint buttons,jboolean relative) {
     auto *c=(Client*)ptr;if(!c)return;pthread_mutex_lock(&c->writer);
-    lorieEvent e{};e.type=EVENT_MOUSE;e.mouse.x=x;e.mouse.y=y;sendEvent(c,e);
+    lorieEvent e{};
+    if (!relative || x != 0 || y != 0) {
+        e.type=EVENT_MOUSE;e.mouse.x=x;e.mouse.y=y;e.mouse.relative=relative ? 2 : 0;sendEvent(c,e);
+    }
     for(int i=0;i<3;i++)if((c->buttons^buttons)&(1<<i)) {
         e={};e.type=EVENT_MOUSE;e.mouse.detail=i+1;e.mouse.down=(buttons>>i)&1;sendEvent(c,e);
     }
@@ -156,15 +167,17 @@ JNI(void) METHOD(nativePointer)(JNIEnv*,jobject,jlong ptr,jint x,jint y,jint but
     }
     c->buttons=buttons;pthread_mutex_unlock(&c->writer);
 }
-JNI(void) METHOD(nativeScroll)(JNIEnv*, jobject, jlong ptr, jint x, jint y, jfloat horizontal, jfloat vertical) {
+JNI(void) METHOD(nativeScroll)(JNIEnv*, jobject, jlong ptr, jint x, jint y, jfloat horizontal, jfloat vertical, jboolean position) {
     auto *client = (Client*)ptr;
     if (!client) return;
     pthread_mutex_lock(&client->writer);
     lorieEvent event{};
     event.type = EVENT_MOUSE;
-    event.mouse.x = x;
-    event.mouse.y = y;
-    sendEvent(client, event);
+    if (position) {
+        event.mouse.x = x;
+        event.mouse.y = y;
+        sendEvent(client, event);
+    }
     event.mouse.detail = 4; // Lorie scroll packets use 120 units per wheel step.
     event.mouse.x = horizontal * 120;
     event.mouse.y = -vertical * 120;

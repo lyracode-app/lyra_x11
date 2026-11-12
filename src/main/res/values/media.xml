@@ -13,6 +13,9 @@
         <item>GPU: automatic</item>
         <item>GPU: require VirGL</item>
         <item>GPU: software</item>
+        <item>GPU: Venus (experimental Vulkan)</item>
+        <item>GPU: Turnip (Adreno)</item>
+        <item>GPU: VirGL ANGLE (Mali-G925, OpenGL 3.3)</item>
     </string-array>
     <string-array name="x11_display_modes">
         <item>Display: automatic (native X11 first)</item>
